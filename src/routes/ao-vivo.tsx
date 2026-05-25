@@ -156,7 +156,12 @@ export default function AoVivoRoute() {
   const [sheetsSyncError, setSheetsSyncError] = useState<string | null>(null);
   const [sheetsSyncSuccess, setSheetsSyncSuccess] = useState<boolean>(false);
   const [isDirectorPanelOpen, setIsDirectorPanelOpen] = useState(false);
-  const [isAdmin, setIsAdmin] = useState(false);
+  const [isAdmin] = useState(() => {
+    if (typeof window !== "undefined") {
+      return new URLSearchParams(window.location.search).get("admin") === "true";
+    }
+    return false;
+  });
   
   // Estados para integração com Telegram Web App
   const [dynamicLocation, setDynamicLocation] = useState<string>("");
@@ -166,13 +171,6 @@ export default function AoVivoRoute() {
   useEffect(() => {
     if (typeof window !== "undefined") {
       setDynamicLocation(window.location.origin + window.location.pathname);
-      // Se explicitamente configurado como ?admin=true, ativa a engrenagem, caso contrário mantém desabilitado por padrão para espectadores normais
-      const adminParam = new URLSearchParams(window.location.search).get("admin");
-      if (adminParam === "true") {
-        setIsAdmin(true);
-      } else {
-        setIsAdmin(false);
-      }
     }
   }, []);
 

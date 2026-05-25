@@ -275,7 +275,7 @@ function buildResponsePayload(item, seekOffset) {
     videoUrl: directUrl,
     startedAt: item.horarioCalculado,
     durationSeconds: item.durationSeconds,
-    seekOffset: clampedOffsetForVideo(clampedOffset, item.durationSeconds),
+    seekOffset: clampedOffsetForVideo(seekOffset, item.durationSeconds),
     isBackup: false
   };
 }
