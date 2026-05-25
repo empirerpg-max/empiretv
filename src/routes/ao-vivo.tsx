@@ -241,10 +241,19 @@ export default function AoVivoRoute() {
   const [useDriveIframe, setUseDriveIframe] = useState<boolean>(() => {
     if (typeof window !== "undefined") {
       const saved = localStorage.getItem("rpg_sonora_use_drive_iframe");
-      return saved === "true"; // Padrão agora é false (usa player nativo MP4 de TV limpo e estético)
+      if (saved === "true") {
+        localStorage.setItem("rpg_sonora_use_drive_iframe", "false");
+      }
+      return false; // Padrão agora é estritamente false
     }
     return false;
   });
+
+  // Estado que monitora se o espectador sintonizou ativamente a transmissão virtual (VOD-to-Live com áudio)
+  const [isTuned, setIsTuned] = useState(false);
+
+  // URL do próximo vídeo da fila cronológica para realizar pré-carregamento dinâmico (Buffering antecipado)
+  const [nextPreloadUrl, setNextPreloadUrl] = useState("");
 
   // Estados dos Sistemas de Agendamento (Planilha Google & Lista Local)
   const [scriptUrl, setScriptUrl] = useState(() => {
@@ -899,6 +908,33 @@ export default function AoVivoRoute() {
         const driveIframeUrl = getDriveIframeUrl(originalUrl);
         const expectedUrl = driveIframeUrl && useDriveIframe ? originalUrl : directUrl;
 
+        // --- ENGENHARIA DE PRÉ-CARREGAMENTO (Preload do Próximo Item da Fila) ---
+        try {
+          const activeIdx = fullSchedule.findIndex(item => 
+            (item.id && activeVideo.id && item.id === activeVideo.id) || 
+            (item.rowNum && activeVideo.rowNum && item.rowNum === activeVideo.rowNum)
+          );
+          if (activeIdx !== -1 && activeIdx + 1 < fullSchedule.length) {
+            const nextVideoItem = fullSchedule[activeIdx + 1];
+            const nextUrlRaw = nextVideoItem.link_drive || nextVideoItem.videoUrl || "";
+            const nextDirectUrl = convertDriveLinkToDirect(nextUrlRaw);
+            if (nextDirectUrl && nextDirectUrl !== nextPreloadUrl) {
+              setNextPreloadUrl(nextDirectUrl);
+              console.log(`[Stream Preload] Pré-carregando em segundo plano: ${nextVideoItem.programa || "Próximo"} (${nextDirectUrl})`);
+            }
+          } else {
+            // Se for o último do dia ou da lista local, precarrega o primeiro para looping suave
+            const firstVideoItem = fullSchedule[0];
+            const firstUrlRaw = firstVideoItem.link_drive || firstVideoItem.videoUrl || "";
+            const firstDirectUrl = convertDriveLinkToDirect(firstUrlRaw);
+            if (firstDirectUrl && firstDirectUrl !== nextPreloadUrl) {
+              setNextPreloadUrl(firstDirectUrl);
+            }
+          }
+        } catch(e) {
+          console.warn("Erro no cálculo do preload do vídeo", e);
+        }
+
         // SE O VÍDEO SELECIONADO NA GRADE MUDOU (novo horário/programa começou)
         if (currentChannel.url !== expectedUrl) {
           console.log(`[Transmissão de TV] Transição automática de programa detectada. Trocando vídeo para: ${activeVideo.programa || activeVideo.titulo}`);
@@ -916,8 +952,11 @@ export default function AoVivoRoute() {
             seekOffset: seekOffset
           });
 
-          initPlayer(expectedUrl, false, seekOffset);
-        } else {
+          // Se estiver ativamente sintonizado, inicia o novo player de vídeo com o offset temporal adequado
+          if (isTuned) {
+            initPlayer(expectedUrl, false, seekOffset);
+          }
+        } else if (isTuned) {
           // SE É O MESMO VÍDEO: garante que o tempo real de reprodução não divirja do relógio do servidor (VOD-to-Live)
           const video = videoRef.current;
           if (video && isPlaying && !isLoading && !hasError) {
@@ -927,9 +966,9 @@ export default function AoVivoRoute() {
             const activeDuration = video.duration || activeVideo.durationSeconds || parseInt(activeVideo.duracao_segundos || "600", 10) || 600;
             const targetTime = seekOffset % activeDuration;
 
-            // Se o desvio for de mais de 8 segundos (por buffering, pausar ou lag), reposiciona o vídeo suavemente de volta na hora certa!
+            // Se o desvio for de mais de 8 segundos (por buffering, decolagem rápida ou pausa), sincroniza com a TV de volta!
             if (Math.abs(currentVideoTime - targetTime) > 8) {
-              console.log(`[Sincronia TV] Corrigindo desvio de transmissão ao vivo de ${Math.round(currentVideoTime)}s para ${Math.round(targetTime)}s`);
+              console.log(`[Sincronia TV] Corrigindo desvio de transmissão de ${Math.round(currentVideoTime)}s para ${Math.round(targetTime)}s`);
               video.currentTime = targetTime;
             }
           }
@@ -938,7 +977,7 @@ export default function AoVivoRoute() {
     }, 4000);
 
     return () => clearInterval(liveTimer);
-  }, [fullSchedule, currentChannel.url, isPlaying, isLoading, hasError, useDriveIframe, initPlayer]);
+  }, [fullSchedule, currentChannel.url, isPlaying, isLoading, hasError, useDriveIframe, initPlayer, isTuned, nextPreloadUrl]);
 
   // Controles manuais
   const togglePlay = () => {
@@ -1281,20 +1320,103 @@ export default function AoVivoRoute() {
               </div>
             )}
 
-            {/* Overlay de Clique para Jogar/Play (Garante sintonia mesmo com autoplay bloqueado pelo navegador) */}
-            {!isPlaying && !isLoading && !hasError && (
+            {/* Overlay sintonizador inicial para capturar interação do usuário e sintonizar áudio sem bloqueios */}
+            {!isTuned && (
+              <div 
+                onClick={() => {
+                  setIsTuned(true);
+                  setIsMuted(false);
+                  setIsPlaying(true);
+                  
+                  // Sincroniza e força play unmuted na hora de Brasília
+                  const video = videoRef.current;
+                  if (video) {
+                    video.muted = false;
+                    video.volume = volume;
+                    
+                    if (fullSchedule && fullSchedule.length > 0) {
+                      const activeResult = findActiveVideoInTimeline(fullSchedule);
+                      if (activeResult) {
+                        const { seekOffset, activeVideo } = activeResult;
+                        const activeDuration = video.duration || activeVideo.durationSeconds || parseInt(activeVideo.duracao_segundos || "600", 10) || 600;
+                        const targetTime = seekOffset % activeDuration;
+                        console.log(`[Sintonizador Central] Sintonizando no feed virtual ao vivo. Frame: ${Math.round(targetTime)}s`);
+                        video.currentTime = targetTime;
+                      }
+                    }
+
+                    video.play()
+                      .then(() => setIsPlaying(true))
+                      .catch((err) => {
+                        console.warn("Autoplay bloqueado. Forçando mudo temporário", err);
+                        video.muted = true;
+                        setIsMuted(true);
+                        video.play()
+                          .then(() => setIsPlaying(true))
+                          .catch(() => setIsPlaying(false));
+                      });
+                  }
+                }}
+                className="absolute inset-0 z-30 flex flex-col items-center justify-center bg-zinc-950/95 cursor-pointer border-2 border-primary/25 rounded-2xl group transition-all"
+              >
+                <div className="absolute inset-0 bg-cover bg-center opacity-5 filter blur-sm" style={{ backgroundImage: "url('https://images.unsplash.com/photo-1514525253161-7a46d19cd819?w=800')" }} />
+                
+                <div className="relative z-10 flex flex-col items-center max-w-md px-6 text-center">
+                  <div className="relative mb-6">
+                    <div className="absolute -inset-1 rounded-full bg-gradient-to-r from-primary to-amber-500 blur opacity-75 group-hover:opacity-100 transition duration-1000 group-hover:duration-200 animate-pulse" />
+                    <button className="relative bg-zinc-900 border border-border/80 text-white rounded-full p-6 group-hover:scale-105 active:scale-95 transition-all flex items-center justify-center shadow-2xl">
+                      <Tv2 className="w-10 h-10 text-primary group-hover:text-amber-400 transition-colors" />
+                    </button>
+                  </div>
+
+                  <h2 className="font-sans text-xl sm:text-2xl font-black text-white uppercase tracking-wider mb-2">
+                    Sinal de TV ao Vivo
+                  </h2>
+                  
+                  <div className="mb-6 p-4 rounded-xl bg-zinc-900/90 border border-border/60 text-left w-full space-y-2">
+                    <p className="text-[10px] uppercase font-mono text-zinc-500 flex items-center gap-1.5 border-b border-border/40 pb-1.5 mb-1.5 font-bold">
+                      <Radio className="w-3.5 h-3.5 text-primary animate-pulse" />
+                      Virtual TV - Transmissão Ativa
+                    </p>
+                    <p className="text-xs text-zinc-300 font-sans leading-relaxed truncate">
+                      📺 <strong>Programa:</strong> <span className="text-primary font-bold uppercase">{currentChannel.program || currentChannel.genre || "Teatro RPG"}</span>
+                    </p>
+                    <p className="text-xs text-zinc-300 font-sans leading-relaxed truncate">
+                      🎵 <strong>No Ar:</strong> <span className="text-zinc-100">{currentChannel.nowPlaying || "Sintonizando Programação..."}</span>
+                    </p>
+                    {currentChannel.buffBoost && (
+                      <p className="text-[10px] text-emerald-400 font-mono mt-2 flex items-center gap-1">
+                        <Sparkles className="w-3 h-3 text-emerald-400 animate-spin" />
+                        <span>Buff Ativo de Sintonia: {currentChannel.buffBoost}</span>
+                      </p>
+                    )}
+                  </div>
+
+                  <span className="w-full py-3.5 px-6 bg-gradient-to-r from-primary to-amber-600 hover:from-primary-hover hover:to-amber-700 text-white font-extrabold rounded-xl text-sm transition-all shadow-xl shadow-primary/30 font-mono tracking-widest uppercase hover:scale-[1.02] active:scale-[0.98]">
+                    📺 SINTONIZAR ESTAÇÃO
+                  </span>
+                  
+                  <p className="text-[10px] text-zinc-500 mt-3 font-mono leading-relaxed">
+                    Clique para conectar com áudio e sincronizar instantaneamente no segundo exato com base no relógio do Reino.
+                  </p>
+                </div>
+              </div>
+            )}
+
+            {/* Overlay de Clique para Jogar/Play secundário (Garante sintonia se pausado após sintonizar primeiro) */}
+            {isTuned && !isPlaying && !isLoading && !hasError && (
               <div 
                 onClick={togglePlay}
-                className="absolute inset-0 z-10 flex flex-col items-center justify-center bg-black/70 hover:bg-black/55 transition-colors cursor-pointer group"
+                className="absolute inset-0 z-15 flex flex-col items-center justify-center bg-black/70 hover:bg-black/55 transition-colors cursor-pointer group"
               >
                 <div className="p-5 bg-primary/95 hover:bg-primary text-white rounded-full transition-all group-hover:scale-110 active:scale-95 shadow-2xl shadow-primary/40 flex items-center justify-center animate-bounce">
                   <Play className="w-8 h-8 fill-current" />
                 </div>
                 <p className="text-sm font-semibold text-white mt-4 font-mono uppercase tracking-wider text-center px-4 drop-shadow">
-                  Clique para iniciar a sintonia e coletar loot de RPG!
+                  Clique para continuar a sintonia coletiva!
                 </p>
                 <p className="text-[10px] text-zinc-400 mt-1.5 font-mono">
-                  Seu progresso de visualização começará a contar automaticamente
+                  Sua exibição pulará instantaneamente para a cena correta atual no ar.
                 </p>
               </div>
             )}
@@ -1349,7 +1471,7 @@ export default function AoVivoRoute() {
             )}
 
             {/* CONTROLES DO VIDEO (Estilo Gamer/RPG Avançado, somem se inativo ou no Modo TV automática) */}
-            <div className="absolute bottom-0 inset-x-0 bg-gradient-to-t from-black/95 via-black/60 to-transparent p-4 flex flex-col gap-3 group-hover:translate-y-0 translate-y-1 sm:translate-y-2 opacity-0 group-hover:opacity-100 transition-all duration-300 z-10">
+            <div className="absolute bottom-0 inset-x-0 bg-gradient-to-t from-black/95 via-black/60 to-transparent p-4 flex flex-col gap-3 group-hover:translate-y-0 translate-y-1 sm:translate-y-2 opacity-0 group-hover:opacity-100 transition-all duration-300 z-20">
               
               {/* Informação Flutuante da Faixa Atual */}
               <div className="flex items-center justify-between text-xs font-mono text-gray-300 mb-1">
@@ -1904,6 +2026,38 @@ export default function AoVivoRoute() {
                 </div>
               </div>
 
+            </div>
+
+            {/* Dicas de Streaming & Buffering Ultrarrápido */}
+            <div className="mt-6 bg-[#161a2b]/60 border border-[#1d1e3d] p-5 rounded-2xl text-left leading-normal space-y-3.5">
+              <h4 className="text-xs font-bold uppercase tracking-wider font-mono text-amber-400 flex items-center gap-1.5">
+                <Sparkles className="w-4 h-4 text-amber-400 animate-pulse" />
+                Dicas de Ouro: Buffering Rápido & Sinal Estável
+              </h4>
+              <p className="text-xs text-zinc-400">
+                Para fazer sua TV Virtual carregar tão rápido quanto a Twitch e garantir que qualquer um que chegue no meio assista no ponto certo sem travar, siga essas configurações:
+              </p>
+              
+              <ul className="space-y-2.5 text-xs text-zinc-300">
+                <li className="flex items-start gap-2">
+                  <span className="text-primary mt-0.5 font-bold">👉</span>
+                  <span>
+                    <strong>Use Dropbox (Para Vídeos Grandes):</strong> Crie uma conta gratuita no Dropbox, suba seu vídeo lá e copie o link de compartilhamento. Altere o final de <code className="bg-black/30 px-1 py-0.5 rounded text-[#229ED9]">?dl=0</code> para <code className="bg-black/30 px-1 py-0.5 rounded text-emerald-400 font-bold">?dl=1</code> antes de inserir na planilha. O player nativo dele abrirá como stream bruto em altíssima velocidade!
+                  </span>
+                </li>
+                <li className="flex items-start gap-2">
+                  <span className="text-primary mt-0.5 font-bold">👉</span>
+                  <span>
+                    <strong>Limite de 100MB no Google Drive:</strong> O Google Drive limita o tráfego direto de downloads de arquivos maiores de 100MB gerando uma tela de "Aviso de Vírus" que quebra reprodutores nativos. Para links diretos do Drive, mantenha os clipes e mídias abaixo de 100MB para que a sintonia comece instantaneamente!
+                  </span>
+                </li>
+                <li className="flex items-start gap-2">
+                  <span className="text-primary mt-0.5 font-bold">👉</span>
+                  <span>
+                    <strong>Hospedeiros Auxiliares:</strong> CDNs públicas, Discord (links de anexos), e serviços de hospedagem crua de mídia como Archive.org carregam de forma instantânea e são totalmente compatíveis com as estatísticas de recompensa do clã (Loot RPG).
+                  </span>
+                </li>
+              </ul>
             </div>
 
             {/* Informação sobre a realocação do Guia para a planilha */}
