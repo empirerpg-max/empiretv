@@ -40,25 +40,37 @@ export default function AoVivo() {
       const video = videoRef.current;
       if (!video || !c.videoUrl) return;
 
-      // Se for um vídeo diferente do atual, troca e sincroniza
       if (currentUrlRef.current !== c.videoUrl) {
         currentUrlRef.current = c.videoUrl;
+
+        // Remove listeners antigos antes de trocar o src
+        video.pause();
+        video.removeAttribute("src");
+        video.load();
+
+        // Usa addEventListener com { once: true } — mais confiável que .oncanplay
+        video.addEventListener(
+          "canplay",
+          () => {
+            video.currentTime = Math.max(c.seekOffset || 0, 0);
+            video.play().catch(() => {
+              // Autoplay bloqueado — usuário precisa clicar em play uma vez
+            });
+          },
+          { once: true }
+        );
+
         video.src = c.videoUrl;
         video.load();
 
-        video.oncanplay = () => {
-          video.currentTime = Math.max(c.seekOffset || 0, 0);
-          video.play().catch(() => {
-            // Autoplay bloqueado pelo navegador — usuário precisa clicar
-          });
-        };
       } else {
-        // Mesmo vídeo: verifica se está muito dessincronizado (> 5 segundos)
+        // Mesmo vídeo — só corrige dessincronização maior que 5s
         const diff = Math.abs(video.currentTime - (c.seekOffset || 0));
         if (diff > 5) {
           video.currentTime = c.seekOffset || 0;
         }
       }
+
     } catch (e) {
       setErro("Erro ao conectar com a grade de programação.");
     } finally {
@@ -68,7 +80,6 @@ export default function AoVivo() {
 
   useEffect(() => {
     fetchAndSync();
-    // Sincroniza a cada 60 segundos para pegar próximo vídeo da fila
     const interval = setInterval(fetchAndSync, 60000);
     return () => clearInterval(interval);
   }, [fetchAndSync]);
@@ -87,8 +98,11 @@ export default function AoVivo() {
           controls
           playsInline
           style={styles.video}
-          onEnded={fetchAndSync} // quando terminar, busca o próximo
-          onError={() => setErro("Erro ao carregar o vídeo. Verifique se o arquivo do Drive está público.")}
+          onEnded={fetchAndSync}
+          onError={(e) => {
+            const err = (e.target as HTMLVideoElement).error;
+            setErro(`Erro ao carregar vídeo (código ${err?.code}). Verifique se o arquivo do Drive está público e se o Worker está ativo.`);
+          }}
         />
       </div>
 
