@@ -100,7 +100,10 @@ const convertDriveLinkToDirect = (url: string) => {
 // Nova função utilitária para converter link do Drive compartilhável em link de visualização em Iframe
 const getDriveIframeUrl = (url: string) => {
   if (!url) return "";
-  const regExp = /\/file\/d\/([^\/]+)|\/open\?id=([^\/&]+)|id=([^\/&]+)/;
+  if (url.includes("drive.google.com/file/d/") && url.includes("/preview")) {
+    return url;
+  }
+  const regExp = /\/file\/d\/([^\/?#&]+)|\/open\?id=([^\/?#&]+)|[?&]id=([^\/?#&]+)/;
   const matches = url.match(regExp);
   if (matches) {
     const fileId = matches[1] || matches[2] || matches[3];
@@ -153,7 +156,7 @@ export default function AoVivoRoute() {
   const [sheetsSyncError, setSheetsSyncError] = useState<string | null>(null);
   const [sheetsSyncSuccess, setSheetsSyncSuccess] = useState<boolean>(false);
   const [isDirectorPanelOpen, setIsDirectorPanelOpen] = useState(false);
-  const [isAdmin, setIsAdmin] = useState(true);
+  const [isAdmin, setIsAdmin] = useState(false);
   
   // Estados para integração com Telegram Web App
   const [dynamicLocation, setDynamicLocation] = useState<string>("");
@@ -163,12 +166,12 @@ export default function AoVivoRoute() {
   useEffect(() => {
     if (typeof window !== "undefined") {
       setDynamicLocation(window.location.origin + window.location.pathname);
-      // Se explicitamente configurado como ?admin=false, esconde a engrenagem, caso contrário mantém habilitado por padrão
+      // Se explicitamente configurado como ?admin=true, ativa a engrenagem, caso contrário mantém desabilitado por padrão para espectadores normais
       const adminParam = new URLSearchParams(window.location.search).get("admin");
-      if (adminParam === "false") {
-        setIsAdmin(false);
-      } else {
+      if (adminParam === "true") {
         setIsAdmin(true);
+      } else {
+        setIsAdmin(false);
       }
     }
   }, []);
@@ -631,21 +634,24 @@ export default function AoVivoRoute() {
         elapsed = (24 * 3600) - activeItem.startSecs + nowInSeconds;
       }
 
+      const originalUrl = activeItem.link_drive || "";
+      const directUrl = convertDriveLinkToDirect(originalUrl);
+      const driveIframeUrl = getDriveIframeUrl(originalUrl);
+      const playerUrl = driveIframeUrl && useDriveIframe ? originalUrl : directUrl;
+
       // Sintoniza
       setCurrentChannel({
         id: `local_active_${activeItem.index}`,
         name: activeItem.titulo || "Transmissão Sonora",
-        url: activeItem.link_drive || "",
-        fallbackUrl: activeItem.link_drive || "",
+        url: playerUrl,
+        fallbackUrl: directUrl,
         nowPlaying: activeItem.musica_atual || "Banda do Bardo",
         genre: activeItem.descricao || "Grade Local",
         buffBoost: activeItem.buff_rpg || "+5% MP"
       });
 
-      // Passar o link direto e o offset para o player inicializar exatamente na minutagem certa!
-      // Se for link do Drive de compartilhamento, convertemos amigavelmente:
-      const directUrl = convertDriveLinkToDirect(activeItem.link_drive || "");
-      initPlayer(directUrl, false, elapsed);
+      // Passar a URL correta (Iframe ou Direct) e o offset para o player inicializar perfeitamente!
+      initPlayer(playerUrl, false, elapsed);
 
       if (isManualRefresh) {
         setMessages(prev => [
@@ -849,8 +855,8 @@ export default function AoVivoRoute() {
         </header>
       )}
 
-      {/* Faixa de Alerta - Conexão com Script do Usuário ou Script Padrão */}
-      {!isSmartTvMode && isGoogleSheetsActive && scriptUrl.includes("AKfycby7OeFYuai1QoTEXD427-Kn") && (
+      {/* Faixa de Alerta - Conexão com Script do Usuário ou Script Padrão (Apenas visível se for admin) */}
+      {isAdmin && !isSmartTvMode && isGoogleSheetsActive && scriptUrl.includes("AKfycby7OeFYuai1QoTEXD427-Kn") && (
         <div className="bg-[#1e140d]/80 border-b border-amber-500/20 px-4 py-2.5 flex flex-col sm:flex-row items-center justify-between text-xs text-amber-200/95 gap-3 transition-all animate-in slide-in-from-top-4 duration-300">
           <div className="flex items-center gap-2.5">
             <span className="flex h-2 w-2 relative">
@@ -1096,8 +1102,8 @@ export default function AoVivoRoute() {
 
           </div>
 
-          {/* Caixa de Diagnóstico e Compatibilidade de Google Drive (Sintonia Iframe Inteligente) */}
-          {getDriveIframeUrl(currentChannel.url) && !isSmartTvMode && (
+          {/* Caixa de Diagnóstico e Compatibilidade de Google Drive (Sintonia Iframe Inteligente - Visível apenas para o Admin) */}
+          {isAdmin && getDriveIframeUrl(currentChannel.url) && !isSmartTvMode && (
             <div className="bg-[#0f111e]/90 border border-primary/20 backdrop-blur-md p-3.5 rounded-2xl flex flex-col sm:flex-row items-center justify-between gap-4 text-xs w-full shadow-lg shadow-primary/5 transition-all text-left">
               <div className="flex items-start gap-2.5">
                 <div className="p-2.5 bg-primary/10 border border-primary/20 text-primary rounded-xl shrink-0">
