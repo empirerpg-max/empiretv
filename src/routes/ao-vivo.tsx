@@ -78,6 +78,23 @@ const INITIAL_MESSAGES: ChatMessage[] = [
   { id: "5", sender: "Nath_VIP", role: "bard", text: "Já sintonizei aqui na TV e no celular para garantir o progresso de 80%!", timestamp: "15:43", guild: "Empire Lions" }
 ];
 
+// Função utilitária global para converter link do Drive compartilhável em download direto para o player web
+const convertDriveLinkToDirect = (url: string) => {
+  if (!url) return "";
+  if (url.includes("docs.google.com/uc") || url.includes("drive.usercontent.google.com")) {
+    return url;
+  }
+  const regExp = /\/file\/d\/([^\/]+)|\/open\?id=([^\/&]+)|id=([^\/&]+)/;
+  const matches = url.match(regExp);
+  if (matches) {
+    const fileId = matches[1] || matches[2] || matches[3];
+    if (fileId) {
+      return `https://docs.google.com/uc?export=download&id=${fileId}`;
+    }
+  }
+  return url;
+};
+
 export default function AoVivoRoute() {
   // Estados para gerenciar o player
   const [currentChannel, setCurrentChannel] = useState<StreamChannel>(CHANNELS[0]);
@@ -273,7 +290,14 @@ export default function AoVivoRoute() {
         setIsLoading(false);
       };
 
+      const onVideoError = () => {
+        setIsLoading(false);
+        setHasError(true);
+        setErrorMessage("Erro de carregamento do vídeo do Google Drive / MP4. Verifique se o link compartilhado no Drive está público ('Qualquer pessoa com o link pode ver') e se a conta do Sheets/Drive não excedeu o limite de requisições do Google.");
+      };
+
       video.addEventListener("loadedmetadata", onLoadedMetadata, { once: true });
+      video.addEventListener("error", onVideoError, { once: true });
 
       video.play()
         .then(() => {
@@ -379,19 +403,20 @@ export default function AoVivoRoute() {
         if (data && data.status === "success" && data.current) {
           const stream = data.current;
           if (stream.status === "broadcasting" && stream.videoUrl) {
+            const finalVideoUrl = convertDriveLinkToDirect(stream.videoUrl);
             // Sintonizar a transmissão retornada pela planilha com o offset calculado pelo Google Script
             setCurrentChannel({
               id: "sheets_active",
               name: stream.title || "Canal Planilha",
-              url: stream.videoUrl,
-              fallbackUrl: stream.videoUrl,
+              url: finalVideoUrl,
+              fallbackUrl: finalVideoUrl,
               nowPlaying: stream.nowPlaying || "Música em Transmissão",
               genre: stream.description || "Programação Ordenada",
               buffBoost: stream.buff || "Sem Buff Ativo"
             });
 
             // Sintoniza com o offset no player de vídeo
-            initPlayer(stream.videoUrl, false, stream.seekOffset || 0);
+            initPlayer(finalVideoUrl, false, stream.seekOffset || 0);
 
             if (isManualRefresh) {
               setMessages(prev => [
@@ -540,23 +565,6 @@ export default function AoVivoRoute() {
       }
     }
   }, [localProgramList, initPlayer, currentChannel.url]);
-
-  // Função utilitária para converter link do Drive compartilhável em download direto para o player web
-  const convertDriveLinkToDirect = (url: string) => {
-    if (!url) return "";
-    if (url.includes("docs.google.com/uc") || url.includes("drive.usercontent.google.com")) {
-      return url;
-    }
-    const regExp = /\/file\/d\/([^\/]+)|\/open\?id=([^\/&]+)|id=([^\/&]+)/;
-    const matches = url.match(regExp);
-    if (matches) {
-      const fileId = matches[1] || matches[2] || matches[3];
-      if (fileId) {
-        return `https://docs.google.com/uc?export=download&id=${fileId}`;
-      }
-    }
-    return url;
-  };
 
   // Carregar transmissão correta na montagem do componente
   useEffect(() => {
