@@ -114,11 +114,112 @@ const getDriveIframeUrl = (url: string) => {
   return "";
 };
 
+// Helper para construir a linha do tempo enfileirada no modo local (equivalente ao buildActiveTimeline do Apps Script)
+const buildLocalTimeline = (programList: any[]) => {
+  const sorted = programList.map((item, index) => {
+    const timeStr = String(item.horario || "00:00").trim();
+    const parts = timeStr.split(":");
+    const hours = parseInt(parts[0] || "0", 10);
+    const minutes = parseInt(parts[1] || "0", 10);
+    const configuredStartInSeconds = (hours * 3600) + (minutes * 60);
+
+    let duration = parseInt(item.duracao_segundos || item.duration || "600", 10);
+    if (isNaN(duration) || duration <= 0) {
+      duration = 600;
+    }
+
+    return {
+      ...item,
+      configuredStartInSeconds,
+      durationSeconds: duration,
+      index
+    };
+  }).sort((a, b) => a.configuredStartInSeconds - b.configuredStartInSeconds);
+
+  const timeline: any[] = [];
+  let currentTimelineInSeconds = 0;
+
+  for (let i = 0; i < sorted.length; i++) {
+    const current = sorted[i];
+    let actualStartInSeconds = current.configuredStartInSeconds;
+    if (actualStartInSeconds < currentTimelineInSeconds) {
+      actualStartInSeconds = currentTimelineInSeconds;
+    }
+
+    const actualEndInSeconds = actualStartInSeconds + current.durationSeconds;
+    currentTimelineInSeconds = actualEndInSeconds;
+
+    const h = Math.floor(actualStartInSeconds / 3600);
+    const m = Math.floor((actualStartInSeconds % 3600) / 60);
+    const s = actualStartInSeconds % 60;
+    const calcTimeStr = `${String(h).padStart(2, "0")}:${String(m).padStart(2, "0")}:${String(s).padStart(2, "0")}`;
+
+    timeline.push({
+      ...current,
+      id: `local_prog_${current.index}`,
+      configuredHorario: current.horario,
+      horarioCalculado: calcTimeStr,
+      startInSeconds: actualStartInSeconds,
+      endInSeconds: actualEndInSeconds,
+      durationSeconds: current.durationSeconds
+    });
+  }
+
+  return timeline;
+};
+
+// Helper local para encontrar qual transmissão da linha do tempo local está rodando em tempo real (com reprisa cíclica)
+const findActiveVideoInTimeline = (timeline: any[]) => {
+  if (timeline.length === 0) return null;
+
+  const now = new Date();
+  const currentHour = now.getHours();
+  const currentMinute = now.getMinutes();
+  const currentSeconds = now.getSeconds();
+  
+  const nowInSeconds = (currentHour * 3600) + (currentMinute * 60) + currentSeconds;
+
+  let activeVideo: any = null;
+
+  for (let i = 0; i < timeline.length; i++) {
+    const item = timeline[i];
+    if (nowInSeconds >= (item.startInSeconds || 0) && nowInSeconds < (item.endInSeconds || 0)) {
+      activeVideo = item;
+      break;
+    }
+  }
+
+  if (!activeVideo) {
+    const lastItem = timeline[timeline.length - 1];
+    if (nowInSeconds > lastItem.endInSeconds) {
+      const totalTimelineDuration = lastItem.endInSeconds - timeline[0].startInSeconds;
+      const secSinceTimelineEnd = nowInSeconds - lastItem.endInSeconds;
+      const relativeOffsetInSecs = secSinceTimelineEnd % totalTimelineDuration;
+      
+      const targetSec = timeline[0].startInSeconds + relativeOffsetInSecs;
+      for (let i = 0; i < timeline.length; i++) {
+        const item = timeline[i];
+        if (targetSec >= (item.startInSeconds || 0) && targetSec < (item.endInSeconds || 0)) {
+          return { activeVideo: item, seekOffset: targetSec - item.startInSeconds };
+        }
+      }
+    }
+    activeVideo = timeline[0];
+  }
+
+  if (activeVideo) {
+    const seekOffset = Math.max(0, nowInSeconds - (activeVideo.startInSeconds || 0));
+    return { activeVideo, seekOffset };
+  }
+
+  return null;
+};
+
 export default function AoVivoRoute() {
   // Estados para gerenciar o player
   const [currentChannel, setCurrentChannel] = useState<StreamChannel>(CHANNELS[0]);
-  const [isPlaying, setIsPlaying] = useState(false);
-  const [isMuted, setIsMuted] = useState(false);
+  const [isPlaying, setIsPlaying] = useState(true);
+  const [isMuted, setIsMuted] = useState(true);
   const [volume, setVolume] = useState(0.8);
   const [isFullscreen, setIsFullscreen] = useState(false);
   const [isSmartTvMode, setIsSmartTvMode] = useState(false); // Modo Tela Cheia / Theater para Smart TVs
@@ -138,9 +239,9 @@ export default function AoVivoRoute() {
   const [useDriveIframe, setUseDriveIframe] = useState<boolean>(() => {
     if (typeof window !== "undefined") {
       const saved = localStorage.getItem("rpg_sonora_use_drive_iframe");
-      return saved !== "false"; // Padrão é true (compatível com arquivos grandes)
+      return saved === "true"; // Padrão agora é false (usa player nativo MP4 de TV limpo e estético)
     }
-    return true;
+    return false;
   });
 
   // Estados dos Sistemas de Agendamento (Planilha Google & Lista Local)
@@ -156,6 +257,60 @@ export default function AoVivoRoute() {
   const [sheetsSyncError, setSheetsSyncError] = useState<string | null>(null);
   const [sheetsSyncSuccess, setSheetsSyncSuccess] = useState<boolean>(false);
   const [isDirectorPanelOpen, setIsDirectorPanelOpen] = useState(false);
+  const [fullSchedule, setFullSchedule] = useState<any[]>([]);
+
+  // Retorna informações consolidadas do Programa como um todo (agrupando vídeos de mesmo título e horário configurado)
+  const getActiveSchedItemAndProgram = useCallback((currentTimeOfDayInSeconds: number) => {
+    if (!fullSchedule || fullSchedule.length === 0) return null;
+
+    // Encontra item por horário normal
+    let activeSchedItem = fullSchedule.find(item => 
+      currentTimeOfDayInSeconds >= (item.startInSeconds || 0) && currentTimeOfDayInSeconds < (item.endInSeconds || 0)
+    );
+
+    // Se passou de toda a programação, aplica o cálculo de reprise cíclica idêntico ao do servidor
+    if (!activeSchedItem) {
+      const lastItem = fullSchedule[fullSchedule.length - 1];
+      if (currentTimeOfDayInSeconds > lastItem.endInSeconds) {
+        const totalTimelineDuration = lastItem.endInSeconds - fullSchedule[0].startInSeconds;
+        const secSinceTimelineEnd = currentTimeOfDayInSeconds - lastItem.endInSeconds;
+        const relativeOffsetInSecs = secSinceTimelineEnd % totalTimelineDuration;
+        const targetSec = fullSchedule[0].startInSeconds + relativeOffsetInSecs;
+        
+        activeSchedItem = fullSchedule.find(item => 
+          targetSec >= (item.startInSeconds || 0) && targetSec < (item.endInSeconds || 0)
+        );
+      }
+    }
+
+    if (!activeSchedItem) {
+      activeSchedItem = fullSchedule[0];
+    }
+
+    const currentTitle = (activeSchedItem.titulo || activeSchedItem.title || "").trim().toLowerCase();
+    const targetHorario = activeSchedItem.configuredHorario || activeSchedItem.horario;
+
+    // Filtra todas as partes do mesmo programa sintonizadas para o mesmo horário configurado
+    const programVideos = fullSchedule.filter(item => 
+      String(item.titulo || item.title || "").trim().toLowerCase() === currentTitle &&
+      (item.configuredHorario || item.horario) === targetHorario
+    );
+
+    const startTimes = programVideos.map(v => v.startInSeconds || 0);
+    const endTimes = programVideos.map(v => v.endInSeconds || 0);
+    const minStart = Math.min(...startTimes);
+    const maxEnd = Math.max(...endTimes);
+    const totalDuration = maxEnd - minStart;
+
+    return {
+      activeSchedItem,
+      programVideos,
+      minStart,
+      maxEnd,
+      totalDuration
+    };
+  }, [fullSchedule]);
+
   const [isAdmin] = useState(() => {
     if (typeof window !== "undefined") {
       return new URLSearchParams(window.location.search).get("admin") === "true";
@@ -212,40 +367,7 @@ export default function AoVivoRoute() {
     localStorage.setItem("rpg_sonora_use_drive_iframe", String(useDriveIframe));
   }, [useDriveIframe]);
 
-  // Cronômetro virtual de progresso para quando o player de Iframe do Google Drive estiver ativo
-  useEffect(() => {
-    const driveIframeUrl = getDriveIframeUrl(currentChannel.url);
-    const isGoogleDriveLink = !!driveIframeUrl;
-
-    if (isGoogleDriveLink && useDriveIframe && isPlaying) {
-      // Duração em segundos recomendada do vídeo: usamos a informada pelo canal ou fallback de 15 minutos (900s) para grandes playlists
-      const duration = currentChannel.durationSeconds || 900;
-      
-      // Começamos o progresso com base na minutagem real (seekOffset) sintonizada via VOD-to-Live!
-      const initialSeconds = currentChannel.seekOffset || 0;
-      let elapsedSeconds = initialSeconds;
-
-      const interval = setInterval(() => {
-        elapsedSeconds += 1;
-        const pct = (elapsedSeconds / duration) * 100;
-        setVideoProgress(Math.min(pct, 100));
-
-        if (pct >= 80 && !hasUnlockedReward) {
-          const randomNum = Math.floor(1000000 + Math.random() * 9000000);
-          const code = `EMP-${randomNum}`;
-          setClaimableCode(code);
-          setHasUnlockedReward(true);
-
-          try {
-            const key = `claim_history_${currentChannel.nowPlaying || currentChannel.name}`;
-            localStorage.setItem(key, code);
-          } catch (err) {}
-        }
-      }, 1000);
-
-      return () => clearInterval(interval);
-    }
-  }, [currentChannel.url, useDriveIframe, isPlaying, currentChannel.durationSeconds, currentChannel.seekOffset, hasUnlockedReward]);
+  // Cronotimer virtual retirado daqui para ser declarado após a inicialização dos métodos agendadores
 
   // Sincroniza estado de recompensa ao trocar de canal/programa ativo
   useEffect(() => {
@@ -488,6 +610,10 @@ export default function AoVivoRoute() {
           setSheetsSyncError(null);
           setSheetsSyncSuccess(true);
           
+          if (data.fullSchedule) {
+            setFullSchedule(data.fullSchedule);
+          }
+          
           if (data.current) {
             const stream = data.current;
             const finalVideoUrl = convertDriveLinkToDirect(stream.videoUrl);
@@ -564,12 +690,10 @@ export default function AoVivoRoute() {
   // Lógica local para decidir qual vídeo da lista local rodar com base no horário real de Brasília
   const calculateLocalSchedule = useCallback((isManualRefresh: boolean = false) => {
     const now = new Date();
-    // Forçar cálculo baseado no fuso horário do Brasil se necessário, ou usar local
     const currentHour = now.getHours();
     const currentMinute = now.getMinutes();
     const currentSeconds = now.getSeconds();
     
-    // Segundos decorridos desde a meia-noite
     const nowInSeconds = (currentHour * 3600) + (currentMinute * 60) + currentSeconds;
 
     // Se a lista estiver vazia, usa os canais HLS padrão
@@ -591,65 +715,34 @@ export default function AoVivoRoute() {
       return;
     }
 
-    // Mapear horários de início e ordenar
-    const sortedPrograms = localProgramList.map((item, index) => {
-      const parts = (item.horario || "00:00").split(":");
-      const h = parseInt(parts[0] || "0", 10);
-      const m = parseInt(parts[1] || "0", 10);
-      const startSecs = (h * 3600) + (m * 60);
+    // Constrói linha do tempo enfileirando durações idênticamente ao Google Script!
+    const timeline = buildLocalTimeline(localProgramList);
+    setFullSchedule(timeline);
 
-      return {
-        ...item,
-        startSecs,
-        index
-      };
-    }).sort((a, b) => a.startSecs - b.startSecs);
+    const activeResult = findActiveVideoInTimeline(timeline);
+    if (activeResult) {
+      const { activeVideo, seekOffset } = activeResult;
 
-    // Encontrar qual transmissão cabe no horário atual
-    let activeItem = null;
-    for (let i = 0; i < sortedPrograms.length; i++) {
-      const current = sortedPrograms[i];
-      const next = sortedPrograms[i + 1];
-
-      if (nowInSeconds >= current.startSecs) {
-        if (!next || nowInSeconds < next.startSecs) {
-          activeItem = current;
-          break;
-        }
-      }
-    }
-
-    // Se nenhum item bater (por exemplo, meia noite e a primeira transmissão é às 08:00), usa o último item do dia (reprise)
-    if (!activeItem && sortedPrograms.length > 0) {
-      activeItem = sortedPrograms[sortedPrograms.length - 1];
-    }
-
-    if (activeItem) {
-      // Calcular offset de segundos
-      let elapsed = nowInSeconds - activeItem.startSecs;
-      if (elapsed < 0) {
-        // Se pegou a transmissão do fim do dia anterior para rodar antes do primeiro do dia
-        elapsed = (24 * 3600) - activeItem.startSecs + nowInSeconds;
-      }
-
-      const originalUrl = activeItem.link_drive || "";
+      const originalUrl = activeVideo.link_drive || "";
       const directUrl = convertDriveLinkToDirect(originalUrl);
       const driveIframeUrl = getDriveIframeUrl(originalUrl);
       const playerUrl = driveIframeUrl && useDriveIframe ? originalUrl : directUrl;
 
       // Sintoniza
       setCurrentChannel({
-        id: `local_active_${activeItem.index}`,
-        name: activeItem.titulo || "Transmissão Sonora",
+        id: `local_active_${activeVideo.index}`,
+        name: activeVideo.titulo || "Transmissão Sonora",
         url: playerUrl,
         fallbackUrl: directUrl,
-        nowPlaying: activeItem.musica_atual || "Banda do Bardo",
-        genre: activeItem.descricao || "Grade Local",
-        buffBoost: activeItem.buff_rpg || "+5% MP"
+        nowPlaying: activeVideo.musica_atual || "Banda do Bardo",
+        genre: activeVideo.descricao || "Grade Local",
+        buffBoost: activeVideo.buff_rpg || "+5% MP",
+        durationSeconds: activeVideo.durationSeconds,
+        seekOffset: seekOffset
       });
 
       // Passar a URL correta (Iframe ou Direct) e o offset para o player inicializar perfeitamente!
-      initPlayer(playerUrl, false, elapsed);
+      initPlayer(playerUrl, false, seekOffset);
 
       if (isManualRefresh) {
         setMessages(prev => [
@@ -658,14 +751,97 @@ export default function AoVivoRoute() {
             id: Math.random().toString(),
             sender: "Guia_Sonora_BOT",
             role: "bard",
-            text: `🎯 Sintonizado via Grade Local! Tocando: ${activeItem.titulo} com ${Math.round(elapsed / 60)}m de exibição decorrida em tempo real.`,
+            text: `🎯 Sintonizado via Grade Local! Tocando: ${activeVideo.titulo} com ${Math.round(seekOffset / 60)}m de exibição decorrida em tempo real.`,
             timestamp: new Date().toLocaleTimeString("pt-BR", { hour: "2-digit", minute: "2-digit" }),
             guild: "Sintonia"
           }
         ]);
       }
     }
-  }, [localProgramList, initPlayer, currentChannel.url]);
+  }, [localProgramList, initPlayer, useDriveIframe]);
+
+  // Cronômetro virtual de progresso para quando o player de Iframe do Google Drive estiver ativo
+  useEffect(() => {
+    const driveIframeUrl = getDriveIframeUrl(currentChannel.url);
+    const isGoogleDriveLink = !!driveIframeUrl;
+
+    if (isGoogleDriveLink && useDriveIframe && isPlaying) {
+      // Duração em segundos recomendada do vídeo: usamos a informada pelo canal ou fallback de 15 minutos (900s) para grandes playlists
+      const duration = currentChannel.durationSeconds || 900;
+      
+      // Começamos o progresso com base na minutagem real (seekOffset) sintonizada via VOD-to-Live!
+      const initialSeconds = currentChannel.seekOffset || 0;
+      let elapsedSeconds = initialSeconds;
+
+      const interval = setInterval(() => {
+        elapsedSeconds += 1;
+
+        // Se o vídeo atual terminou, dispara automaticamente a transição para o próximo da fila!
+        if (elapsedSeconds >= duration) {
+          console.log("[Virtual Timer] Vídeo finalizado. Sincronizando próximo da fila...");
+          clearInterval(interval);
+          syncScheduledTransmission(false);
+          return;
+        }
+
+        // Calcula a hora do dia atual para buscar a consolidação do programa
+        const now = new Date();
+        const currentHour = now.getHours();
+        const currentMinute = now.getMinutes();
+        const currentSeconds = now.getSeconds();
+        const nowInSeconds = (currentHour * 3600) + (currentMinute * 60) + currentSeconds;
+
+        const progInfo = getActiveSchedItemAndProgram(nowInSeconds);
+        if (progInfo && progInfo.programVideos.length > 1) {
+          // Há mais de um vídeo para o mesmo programa!
+          // Calculamos o início acumulativo deste vídeo do programa
+          const videoStartInProg = (progInfo.activeSchedItem.startInSeconds || 0) - progInfo.minStart;
+          const elapsedInProg = videoStartInProg + Math.min(elapsedSeconds, duration);
+          const pct = (elapsedInProg / progInfo.totalDuration) * 100;
+          setVideoProgress(Math.min(pct, 100));
+
+          if (pct >= 80 && !hasUnlockedReward) {
+            const randomNum = Math.floor(1000000 + Math.random() * 9000000);
+            const code = `EMP-${randomNum}`;
+            setClaimableCode(code);
+            setHasUnlockedReward(true);
+
+            try {
+              const key = `claim_history_${currentChannel.nowPlaying || currentChannel.name}`;
+              localStorage.setItem(key, code);
+            } catch (err) {}
+          }
+        } else {
+          // Programa de vídeo único, usa o cálculo clássico
+          const pct = (elapsedSeconds / duration) * 100;
+          setVideoProgress(Math.min(pct, 100));
+
+          if (pct >= 80 && !hasUnlockedReward) {
+            const randomNum = Math.floor(1000000 + Math.random() * 9000000);
+            const code = `EMP-${randomNum}`;
+            setClaimableCode(code);
+            setHasUnlockedReward(true);
+
+            try {
+              const key = `claim_history_${currentChannel.nowPlaying || currentChannel.name}`;
+              localStorage.setItem(key, code);
+            } catch (err) {}
+          }
+        }
+      }, 1000);
+
+      return () => clearInterval(interval);
+    }
+  }, [
+    currentChannel.url, 
+    useDriveIframe, 
+    isPlaying, 
+    currentChannel.durationSeconds, 
+    currentChannel.seekOffset, 
+    hasUnlockedReward, 
+    getActiveSchedItemAndProgram, 
+    syncScheduledTransmission
+  ]);
 
   // Carregar transmissão correta na montagem do componente
   useEffect(() => {
@@ -894,7 +1070,7 @@ export default function AoVivoRoute() {
             {getDriveIframeUrl(currentChannel.url) && useDriveIframe ? (
               <iframe
                 id="drive-iframe-player"
-                src={`${getDriveIframeUrl(currentChannel.url)}${getDriveIframeUrl(currentChannel.url).includes("?") ? "&" : "?"}autoplay=1&mute=0`}
+                src={`${getDriveIframeUrl(currentChannel.url)}${getDriveIframeUrl(currentChannel.url).includes("?") ? "&" : "?"}autoplay=1&mute=${isMuted ? 1 : 0}`}
                 className={`w-full h-full border-0 absolute inset-0 bg-black ${isSmartTvMode ? "h-screen" : "aspect-video"}`}
                 allow="autoplay; encrypted-media; picture-in-picture"
                 allowFullScreen
@@ -903,27 +1079,59 @@ export default function AoVivoRoute() {
             ) : (
               <video
                 ref={videoRef}
-                className={`w-full h-full object-cover ${isSmartTvMode ? "h-screen" : "aspect-video"}`}
+                className={`w-full h-full object-contain ${isSmartTvMode ? "h-screen" : "aspect-video"}`}
                 playsInline
+                autoPlay
+                muted={isMuted}
                 onClick={togglePlay}
                 onTimeUpdate={(e) => {
                   const video = e.currentTarget;
                   if (video.duration && video.duration > 0) {
-                    const pct = (video.currentTime / video.duration) * 100;
-                    setVideoProgress(pct);
-                    
-                    if (pct >= 80 && !hasUnlockedReward) {
-                      const randomNum = Math.floor(1000000 + Math.random() * 9000000);
-                      const code = `EMP-${randomNum}`;
-                      setClaimableCode(code);
-                      setHasUnlockedReward(true);
+                    const now = new Date();
+                    const currentHour = now.getHours();
+                    const currentMinute = now.getMinutes();
+                    const currentSeconds = now.getSeconds();
+                    const nowInSeconds = (currentHour * 3600) + (currentMinute * 60) + currentSeconds;
+
+                    const progInfo = getActiveSchedItemAndProgram(nowInSeconds);
+                    if (progInfo && progInfo.programVideos.length > 1) {
+                      const videoStartInProg = (progInfo.activeSchedItem.startInSeconds || 0) - progInfo.minStart;
+                      const elapsedInProg = videoStartInProg + Math.min(video.currentTime, video.duration);
+                      const pct = (elapsedInProg / progInfo.totalDuration) * 100;
+                      setVideoProgress(Math.min(pct, 100));
+
+                      if (pct >= 80 && !hasUnlockedReward) {
+                        const randomNum = Math.floor(1000000 + Math.random() * 9000000);
+                        const code = `EMP-${randomNum}`;
+                        setClaimableCode(code);
+                        setHasUnlockedReward(true);
+                        
+                        try {
+                          const key = `claim_history_${currentChannel.nowPlaying || currentChannel.name}`;
+                          localStorage.setItem(key, code);
+                        } catch(err) {}
+                      }
+                    } else {
+                      const pct = (video.currentTime / video.duration) * 100;
+                      setVideoProgress(pct);
                       
-                      try {
-                        const key = `claim_history_${currentChannel.nowPlaying || currentChannel.name}`;
-                        localStorage.setItem(key, code);
-                      } catch(err) {}
+                      if (pct >= 80 && !hasUnlockedReward) {
+                        const randomNum = Math.floor(1000000 + Math.random() * 9000000);
+                        const code = `EMP-${randomNum}`;
+                        setClaimableCode(code);
+                        setHasUnlockedReward(true);
+                        
+                        try {
+                          const key = `claim_history_${currentChannel.nowPlaying || currentChannel.name}`;
+                          localStorage.setItem(key, code);
+                        } catch(err) {}
+                      }
                     }
                   }
+                }}
+                onEnded={() => {
+                  console.log("[Video Player] Vídeo finalizado. Sincronizando próximo da fila...");
+                  syncScheduledTransmission(false);
                 }}
               />
             )}
@@ -1011,6 +1219,20 @@ export default function AoVivoRoute() {
                   <span>Sair do Modo TV</span>
                 </button>
               </div>
+            )}
+
+            {/* Aviso de Transmissão Silenciada com Autoplay Ativo */}
+            {isMuted && isPlaying && !isLoading && !hasError && (
+              <button
+                onClick={(e) => {
+                  e.stopPropagation();
+                  toggleMute();
+                }}
+                className="absolute top-4 right-4 z-20 flex items-center gap-2 bg-amber-500 hover:bg-amber-400 text-black font-semibold font-sans text-xs px-3 py-1.5 rounded-full shadow-lg border border-amber-400 transition-all cursor-pointer hover:scale-105 active:scale-95 animate-pulse"
+              >
+                <VolumeX className="w-4 h-4 text-black animate-bounce" />
+                <span>🔇 Transmissão Ativa (Toque p/ Ouvir Som) 🔊</span>
+              </button>
             )}
 
             {/* CONTROLES DO VIDEO (Estilo Gamer/RPG Avançado, somem se inativo ou no Modo TV automática) */}
@@ -1167,7 +1389,18 @@ export default function AoVivoRoute() {
                       <p className="text-xs text-muted-foreground mt-0.5">
                         {hasUnlockedReward 
                           ? "Você sintonizou a rádio por bastante tempo e desbloqueou seu loot lendário!" 
-                          : "Assista pelo menos 80% da transmissão ativa para liberar seu código especial de recompensa."}
+                          : (() => {
+                              const now = new Date();
+                              const currentHour = now.getHours();
+                              const currentMinute = now.getMinutes();
+                              const currentSeconds = now.getSeconds();
+                              const nowInSeconds = (currentHour * 3600) + (currentMinute * 60) + currentSeconds;
+                              const progInfo = getActiveSchedItemAndProgram(nowInSeconds);
+                              if (progInfo && progInfo.programVideos.length > 1) {
+                                return `Assista pelo menos 80% do programa total (${progInfo.programVideos.length} vídeos agrupados) para liberar seu bônus de sintonismo.`;
+                              }
+                              return "Assista pelo menos 80% da transmissão ativa para liberar seu código especial de recompensa.";
+                            })()}
                       </p>
                     </div>
                   </div>
