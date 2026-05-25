@@ -126,7 +126,7 @@ export default function AoVivoRoute() {
   });
   const [isSyncing, setIsSyncing] = useState(false);
   const [isDirectorPanelOpen, setIsDirectorPanelOpen] = useState(false);
-  const [isAdmin, setIsAdmin] = useState(false);
+  const [isAdmin, setIsAdmin] = useState(true);
   
   // Estados para integração com Telegram Web App
   const [dynamicLocation, setDynamicLocation] = useState<string>("");
@@ -136,7 +136,13 @@ export default function AoVivoRoute() {
   useEffect(() => {
     if (typeof window !== "undefined") {
       setDynamicLocation(window.location.origin + window.location.pathname);
-      setIsAdmin(new URLSearchParams(window.location.search).get("admin") === "true");
+      // Se explicitamente configurado como ?admin=false, esconde a engrenagem, caso contrário mantém habilitado por padrão
+      const adminParam = new URLSearchParams(window.location.search).get("admin");
+      if (adminParam === "false") {
+        setIsAdmin(false);
+      } else {
+        setIsAdmin(true);
+      }
     }
   }, []);
 
@@ -732,7 +738,7 @@ export default function AoVivoRoute() {
             {isAdmin && (
               <button 
                 onClick={() => setIsDirectorPanelOpen(true)}
-                className="flex items-center gap-2 px-3 py-1.5 rounded-lg text-xs font-medium border border-[#1d1e3d] hover:border-zinc-700 bg-[#161a2b] text-zinc-300 hover:text-white transition-all cursor-pointer"
+                className="flex items-center gap-2 px-3 py-1.5 rounded-lg text-xs font-medium border border-[#1d1e3d] hover:border-zinc-700 bg-[#161a2b] text-zinc-300 hover:text-white transition-all cursor-pointer shadow-lg hover:shadow-primary/15"
                 title="Painel do Diretor (Configuração de Planilha e Integração)"
               >
                 <Settings className="w-4 h-4 text-[#229ED9]" />
@@ -741,6 +747,27 @@ export default function AoVivoRoute() {
             )}
           </div>
         </header>
+      )}
+
+      {/* Faixa de Alerta - Conexão com Script do Usuário ou Script Padrão */}
+      {!isSmartTvMode && isGoogleSheetsActive && scriptUrl.includes("AKfycby7OeFYuai1QoTEXD427-Kn") && (
+        <div className="bg-[#1e140d]/80 border-b border-amber-500/20 px-4 py-2.5 flex flex-col sm:flex-row items-center justify-between text-xs text-amber-200/95 gap-3 transition-all animate-in slide-in-from-top-4 duration-300">
+          <div className="flex items-center gap-2.5">
+            <span className="flex h-2 w-2 relative">
+              <span className="animate-ping absolute inline-flex h-full w-full rounded-full bg-amber-400 opacity-75"></span>
+              <span className="relative inline-flex rounded-full h-2 w-2 bg-amber-500"></span>
+            </span>
+            <span>
+              <strong>📡 Sinal modo Demonstração:</strong> Você está vendo a programação de simulação. Clique no botão ao lado ou na engrenagem de <strong>Sincronia ⚙️</strong> para salvar o link do seu próprio <strong>Google Apps Script</strong> e sintonizar os vídeos da sua planilha!
+            </span>
+          </div>
+          <button 
+            onClick={() => setIsDirectorPanelOpen(true)}
+            className="px-3 py-1.5 bg-amber-500 hover:bg-amber-400 text-black font-extrabold uppercase rounded-lg text-[10px] cursor-pointer transition-all hover:scale-105 active:scale-95 shrink-0 animate-pulse"
+          >
+            Configurar Planilha ⚙️
+          </button>
+        </div>
       )}
 
       {/* 2. ÁREA CENTRAL (Layout Theater de TV) */}
@@ -811,10 +838,28 @@ export default function AoVivoRoute() {
                 </p>
                 <button
                   onClick={() => initPlayer(currentChannel.url)}
-                  className="mt-4 px-4 py-2 bg-primary hover:bg-primary-hover text-white rounded-lg text-xs font-mono font-bold transition-all"
+                  className="mt-4 px-4 py-2 bg-primary hover:bg-primary-hover text-white rounded-lg text-xs font-mono font-bold transition-all cursor-pointer"
                 >
                   TENTAR RECONECTAR
                 </button>
+              </div>
+            )}
+
+            {/* Overlay de Clique para Jogar/Play (Garante sintonia mesmo com autoplay bloqueado pelo navegador) */}
+            {!isPlaying && !isLoading && !hasError && (
+              <div 
+                onClick={togglePlay}
+                className="absolute inset-0 z-10 flex flex-col items-center justify-center bg-black/70 hover:bg-black/55 transition-colors cursor-pointer group"
+              >
+                <div className="p-5 bg-primary/95 hover:bg-primary text-white rounded-full transition-all group-hover:scale-110 active:scale-95 shadow-2xl shadow-primary/40 flex items-center justify-center animate-bounce">
+                  <Play className="w-8 h-8 fill-current" />
+                </div>
+                <p className="text-sm font-semibold text-white mt-4 font-mono uppercase tracking-wider text-center px-4 drop-shadow">
+                  Clique para iniciar a sintonia e coletar loot de RPG!
+                </p>
+                <p className="text-[10px] text-zinc-400 mt-1.5 font-mono">
+                  Seu progresso de visualização começará a contar automaticamente
+                </p>
               </div>
             )}
 
@@ -1140,10 +1185,30 @@ export default function AoVivoRoute() {
                 </div>
 
                 {/* Info Box */}
-                <div className="mt-6 p-3 bg-primary/5 border border-primary/20 rounded-xl flex items-start gap-2.5 text-xs">
-                  <Info className="w-4 h-4 text-primary shrink-0 mt-0.5" />
-                  <div className="text-muted-foreground space-y-1 text-left">
-                    <span>Configure sua planilha com uma aba chamada <code className="text-primary font-mono select-all">Programacao_RPG</code>. Encontre o código completo no arquivo <code className="text-white select-all font-bold">/google-apps-script.js</code> no seu projeto.</span>
+                <div className="mt-4 p-3.5 bg-primary/5 border border-primary/20 rounded-xl flex flex-col gap-2.5 text-xs">
+                  <div className="flex items-start gap-2 text-left">
+                    <Info className="w-4 h-4 text-primary shrink-0 mt-0.5" />
+                    <div className="text-muted-foreground space-y-1.5">
+                      <p>
+                        ⚔️ <strong>Configuração da Planilha:</strong> Certifique-se de que a sua planilha possua uma aba renomeada exatamente como <code className="text-primary font-mono select-all">Programacao_RPG</code>.
+                      </p>
+                      <p>
+                        💾 O código Apps Script completo para implantar está no arquivo <code className="text-white select-all font-bold">/google-apps-script.js</code> do seu projeto. Lembre-se de publicar o script como <strong>Web App (Executar como: Você / Quem tem acesso: Qualquer um)</strong> para evitar bloqueios de CORS!
+                      </p>
+                    </div>
+                  </div>
+
+                  {/* Alerta de Vídeo do Google Drive */}
+                  <div className="border-t border-border/60 pt-2 text-[11px] text-amber-200/90 leading-relaxed text-left space-y-1">
+                    <p className="font-bold uppercase text-amber-400 flex items-center gap-1">
+                      ⚠️ LIMITAÇÕES DE VÍDEOS DO GOOGLE DRIVE:
+                    </p>
+                    <p>
+                      1. <strong>Privacidade:</strong> O arquivo de vídeo no seu Google Drive <strong>deve estar público</strong> ("Qualquer pessoa com o link pode ler") ou o player não conseguirá carregar os dados.
+                    </p>
+                    <p>
+                      2. <strong>Aviso de Vírus (Arquivos Grandes):</strong> Se o seu vídeo for muito grande (normalmente maior que 100MB), o Google Drive exibirá uma tela de aviso impedindo o player de transmiti-lo de imediato. Para vídeos longos, recomendamos hospedar as mídias no Discord, GitHub ou algum outro serviço de hospedagem de arquivos diretos (<code className="text-white font-mono">.mp4</code> ou <code className="text-white font-mono">.m3u8</code>).
+                    </p>
                   </div>
                 </div>
               </div>
