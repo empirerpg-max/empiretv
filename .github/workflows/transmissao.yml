@@ -1,0 +1,46 @@
+name: Transmissão Automática de TV/Rádio (VOD-to-Live)
+
+on:
+  schedule:
+    # Executa o workflow a cada 15 minutos de forma automática (24 horas por dia)
+    - cron: '*/15 * * * *'
+  workflow_dispatch:
+    # Permite disparar a transmissão manualmente pela interface do GitHub se necessário
+
+jobs:
+  transmitir:
+    name: Processar Transmissão Pendente com FFmpeg
+    runs-on: ubuntu-latest
+
+    steps:
+      - name: Baixar Código Fonte do Repositório
+        uses: actions/checkout@v4
+
+      - name: Configurar Ambiente Python 3.10
+        uses: actions/setup-python@v5
+        with:
+          python-version: '3.10'
+          cache: 'pip'
+
+      - name: Instalar Dependências e FFmpeg no Servidor do Actions
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y ffmpeg
+          python -m pip install --upgrade pip
+          pip install gspread oauth2client pytz gdown
+
+      - name: Executar script de automação e iniciar Live Stream
+        env:
+          # Segredo JSON completo da conta de serviço do Google para conectar Sheets e Drive sem restrições
+          GOOGLE_APPLICATION_CREDENTIALS_JSON: ${{ secrets.GOOGLE_APPLICATION_CREDENTIALS_JSON }}
+          
+          # Nome exato da sua Planilha no Drive ou a chave/ID físico presente na URL do Sheets
+          SPREADSHEET_ID: ${{ secrets.SPREADSHEET_ID }}
+          
+          # URL final do servidor de streaming (Ex: rtmp://live.twitch.tv/app/ ou rtmp://a.rtmp.youtube.com/live2)
+          RTMP_URL: ${{ secrets.RTMP_URL }}
+          
+          # Chave de Transmissão secreta fornecida pela Twitch, Kick ou YouTube Studio
+          RTMP_KEY: ${{ secrets.RTMP_KEY }}
+        run: |
+          python transmissao.py

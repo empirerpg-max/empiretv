@@ -482,7 +482,7 @@ export default function AoVivoRoute() {
     if (isMp4) {
       setIsUsingFallback(true);
       video.src = streamUrl;
-      video.loop = true;
+      video.loop = false;
       video.muted = isMuted;
       video.volume = volume;
       video.load();

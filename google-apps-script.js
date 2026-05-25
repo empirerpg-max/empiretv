@@ -5,24 +5,31 @@
  * Este script conecta uma Planilha Google contendo sua "fila de vídeos" (sem limite de quantidade)
  * e calcula a programação exata em tempo real. Se vários vídeos estiverem marcados com o mesmo 
  * horário, eles serão reproduzidos em sequência (Fila / Queue) empilhando suas durações!
+ * 
+ * Compatível tanto com o player nativo em React quanto com a automação de transmissão!
+ * Agora com sistema de auto-limpeza em tempo real para manter a planilha leve e rápida.
  */
 
 // Chave da Planilha. Deixe em branco se o script estiver vinculado à própria planilha
 const SPREADSHEET_ID = ""; 
 
 /**
- * Função receptora de GET requests para servir a grade em tempo real para o player
+ * Função receptora de GET requests para servir a grade em tempo real para o player do front-end
  */
 function doGet(e) {
   try {
     const sheet = getProgramSheet();
+    
+    // EXCLUSÃO AUTOMÁTICA ESPONTÂNEA: Limpa da planilha itens já concluídos/antigos para manter rapidez e BUFFER ágil!
+    limparProgramasVencidosSet(sheet);
+
     const rows = sheet.getDataRange().getValues();
     
     if (rows.length <= 1) {
       initializeExampleData(sheet);
       return createJsonResponse({
         status: "ok",
-        message: "Planilha de programação inicializada! Por favor, recarregue a página.",
+        message: "Planilha de programação inicializada com o novo formato de colunas da TV! Por favor, recarregue o painel.",
         current: null,
         fullSchedule: []
       });
@@ -41,27 +48,31 @@ function doGet(e) {
         }
       });
       
-      // Fallbacks resilientes por ordem física de coluna caso o usuário mescle ou erre os cabeçalhos
-      // Ordem padrão: 0: Dia, 1: Horario, 2: Link_Drive, 3: Duracao_Segundos, 4: Programa, 5: Tipo, 6: Material_Tocando, 7: Buff_RPG
-      if (item["dia"] === undefined && row[0] !== undefined) item["dia"] = row[0];
+      // Fallbacks resilientes por mapeamento físico de colunas normais de transmissão
+      // Colunas requeridas pela automação e pelo visualizador:
+      // Drive_Video_ID, Horario, Status, Programa, Tipo, Material_Tocando, Buff_RPG, Duracao_Segundos
+      if (item["drive_video_id"] === undefined && row[0] !== undefined) item["drive_video_id"] = row[0];
       if (item["horario"] === undefined && row[1] !== undefined) item["horario"] = row[1];
-      if (item["link_drive"] === undefined && row[2] !== undefined) item["link_drive"] = row[2];
-      if (item["duracao_segundos"] === undefined && row[3] !== undefined) item["duracao_segundos"] = row[3];
-      if (item["programa"] === undefined && row[4] !== undefined) item["programa"] = row[4];
-      if (item["tipo"] === undefined && row[5] !== undefined) item["tipo"] = row[5];
-      if (item["material_tocando"] === undefined && row[6] !== undefined) item["material_tocando"] = row[6];
-      if (item["buff_rpg"] === undefined && row[7] !== undefined) item["buff_rpg"] = row[7];
+      if (item["status"] === undefined && row[2] !== undefined) item["status"] = row[2];
+      if (item["programa"] === undefined && row[3] !== undefined) item["programa"] = row[3];
+      if (item["tipo"] === undefined && row[4] !== undefined) item["tipo"] = row[4];
+      if (item["material_tocando"] === undefined && row[5] !== undefined) item["material_tocando"] = row[5];
+      if (item["buff_rpg"] === undefined && row[6] !== undefined) item["buff_rpg"] = row[6];
+      if (item["duracao_segundos"] === undefined && row[7] !== undefined) item["duracao_segundos"] = row[7];
 
-      item.id = "prog_" + (index + 2); // Linha real correspondente na planilha
+      item.id = "prog_" + (index + 2); // Linha física na planilha
       item.rowNum = index + 2;
       return item;
     });
 
-    // Filtra e reconstrói a Linha do Tempo Dinâmica do dia de Hoje (Fila de Vídeos Sequenciais)
+    // Filtra e reconstrói a Linha do Tempo Dinâmica (Fila de Vídeos Sequenciais) baseada no fuso de Brasília
     const activeTimeline = buildActiveTimeline(rawSchedule);
     
-    // Detecta qual vídeo da fila deve estar rodando AGORA
+    // Detecta qual vídeo da fila deve estar rodando AGORA de acordo com o relógio sincronizado
     const currentTransmission = findActiveVideoInTimeline(activeTimeline);
+
+    // Se o programa mudou ou terminou no tempo real e foi sincronizado, atualiza o status na planilha para Concluido
+    atualizarLinhasTransmitidas(sheet, activeTimeline, currentTransmission);
 
     return createJsonResponse({
       status: "success",
@@ -79,87 +90,93 @@ function doGet(e) {
 }
 
 /**
- * Monta uma linha do tempo enfileirada para o dia de hoje.
- * Se múltiplos vídeos tiverem a mesma hora de início, eles são tocados em sequência!
+ * Monta a linha do tempo enfileirada baseada nos horários agendados.
+ * Se múltiplos vídeos tiverem o mesmo horário de início ou conflitos, eles tocam sequencialmente enfileirando as durações!
  */
 function buildActiveTimeline(schedule) {
   const now = new Date();
   
-  // Ajuste padrão para fuso de Brasília (America/Sao_Paulo)
+  // Ajuste padrão e estável para fuso de Brasília (America/Sao_Paulo)
   const localTime = new Date(now.toLocaleString("en-US", { timeZone: "America/Sao_Paulo" }));
-  const dd = String(localTime.getDate()).padStart(2, "0");
-  const mm = String(localTime.getMonth() + 1).padStart(2, "0");
-  const yyyy = localTime.getFullYear();
-  const todayFormatted = dd + "/" + mm + "/" + yyyy; 
+  const todayFormattedYMD = localTime.getFullYear() + "-" + 
+                            String(localTime.getMonth() + 1).padStart(2, "0") + "-" + 
+                            String(localTime.getDate()).padStart(2, "0"); 
 
-  const currentDayOfWeek = localTime.getDay(); // 0-6
-  const dayNames = ["domingo", "segunda", "terça", "quarta", "quinta", "sexta", "sábado"];
-  const currentDayName = dayNames[currentDayOfWeek];
+  // Ordenar itens pelo Horário do agendamento (YYYY-MM-DD HH:MM ou apenas HH:MM)
+  const sortedItems = schedule.map(item => {
+    let horarioStr = String(item["horario"] || "").trim();
+    if (!horarioStr) return null;
 
-  // 1. Filtrar programação do dia de hoje (suportando data em formato DD/MM/YYYY ou "Todos")
-  const todaysItems = schedule.filter(item => {
-    let dayConfigStr = "";
-    
-    if (item["dia"] instanceof Date) {
-      const d = item["dia"];
-      const itemDd = String(d.getDate()).padStart(2, "0");
-      const itemMm = String(d.getMonth() + 1).padStart(2, "0");
-      const itemYyyy = d.getFullYear();
-      dayConfigStr = itemDd + "/" + itemMm + "/" + itemYyyy;
+    let datePart = todayFormattedYMD;
+    let timePart = "00:00";
+
+    // Se o horário inserido já contém data (Ex: YYYY-MM-DD HH:MM)
+    if (horarioStr.includes(" ") || horarioStr.includes("-") || horarioStr.includes("/")) {
+      const parts = horarioStr.split(" ");
+      if (parts.length >= 2) {
+        datePart = parts[0].replace(/\//g, "-");
+        timePart = parts[1];
+      } else {
+        // Se for apenas a data, coloca a zero hora
+        if (horarioStr.includes("-") || horarioStr.includes("/")) {
+          datePart = horarioStr.replace(/\//g, "-");
+          timePart = "00:00";
+        } else {
+          timePart = horarioStr;
+        }
+      }
     } else {
-      dayConfigStr = String(item["dia"] || "").trim();
+      timePart = horarioStr;
     }
 
-    dayConfigStr = dayConfigStr.replace(/-/g, "/").toLowerCase();
-    
-    // Suporta data específica, "todos" ou os dias da semana normais como fallback
-    return dayConfigStr === "todos" || 
-           dayConfigStr === todayFormatted || 
-           dayConfigStr === currentDayName || 
-           dayConfigStr.includes(currentDayName);
-  });
-
-  // 2. Ordenar itens inicialmente pelo Horário de início informado na célula
-  const sortedItems = todaysItems.map(item => {
-    const timeStr = String(item["horario"] || "00:00").trim();
-    const parts = timeStr.split(":");
-    const hours = parseInt(parts[0] || "0", 10);
-    const minutes = parseInt(parts[1] || "0", 10);
+    const tParts = timePart.split(":");
+    const hours = parseInt(tParts[0] || "0", 10);
+    const minutes = parseInt(tParts[1] || "0", 10);
     const configuredStartInSeconds = (hours * 3600) + (minutes * 60);
 
-    // Duração customizada (em segundos). Padrão do bardo: 600 segundos
+    // Duração customizada (em segundos). Padrão do bardo: 600 segundos (10 minutos)
     let duration = parseInt(item["duracao_segundos"] || "600", 10);
     if (isNaN(duration) || duration <= 0) {
       duration = 600; 
     }
 
+    // Cria as strings de data normalizada
+    const scheduledDateTimeStr = datePart + " " + timePart;
+
     return {
       ...item,
+      normalizedDate: datePart,
+      normalizedTime: timePart,
+      scheduledDateTimeStr: scheduledDateTimeStr,
       configuredStartInSeconds: configuredStartInSeconds,
       durationSeconds: duration
     };
-  }).sort((a, b) => a.configuredStartInSeconds - b.configuredStartInSeconds);
+  }).filter(item => item !== null)
+    .sort((a, b) => {
+      // Ordenação cronológica estrita por data e hora do agendamento
+      return a.scheduledDateTimeStr.localeCompare(b.scheduledDateTimeStr);
+    });
 
-  // 3. Montar a Fila Sequencial Real (Encadeamento de durações)
+  // Montar a Fila de Transmissão Contínua (VOD-to-Live)
   const timeline = [];
   let currentTimelineInSeconds = 0;
 
   for (let i = 0; i < sortedItems.length; i++) {
     const current = sortedItems[i];
     
-    // Se o horário estipulado for menor que o término do vídeo anterior,
-    // ele entra na FILA IMEDIATAMENTE após o término do anterior (VOD encadeado)
+    // Calcula o início real estimado na timeline
     let actualStartInSeconds = current.configuredStartInSeconds;
     if (actualStartInSeconds < currentTimelineInSeconds) {
+      // Se acumular por causa do atraso/duração do vídeo anterior na fila, emenda logo em seguida!
       actualStartInSeconds = currentTimelineInSeconds;
     }
 
     const actualEndInSeconds = actualStartInSeconds + current.durationSeconds;
     
-    // Atualiza o final da fila de transmissão
+    // Atualiza o ponteiro do fim da fila do player
     currentTimelineInSeconds = actualEndInSeconds;
 
-    // Formatar horário real estimado de início para o bardo ler na planilha
+    // Formatar horário de início estimado no formato HH:MM:SS
     const startHour = Math.floor(actualStartInSeconds / 3600);
     const startMin = Math.floor((actualStartInSeconds % 3600) / 60);
     const startSec = actualStartInSeconds % 60;
@@ -168,20 +185,25 @@ function buildActiveTimeline(schedule) {
       String(startMin).padStart(2, "0") + ":" + 
       String(startSec).padStart(2, "0");
 
+    // Geramos o Link formatado do Google Drive
+    const videoIdClean = current["drive_video_id"] || "";
+    const originalLinkDrive = videoIdClean.includes("http") ? videoIdClean : "https://docs.google.com/uc?export=download&id=" + videoIdClean;
+
     timeline.push({
       id: current.id,
       rowNum: current.rowNum,
-      dia: current["dia"],
-      configuredHorario: current["horario"],
+      horario: current["horario"],
       horarioCalculado: estimatedStartTimeStr,
       startInSeconds: actualStartInSeconds,
       endInSeconds: actualEndInSeconds,
       durationSeconds: current.durationSeconds,
-      link_drive: current["link_drive"],
-      programa: current["programa"],
-      tipo: current["tipo"],
-      material_tocando: current["material_tocando"],
-      buff_rpg: current["buff_rpg"]
+      link_drive: originalLinkDrive,
+      drive_video_id: videoIdClean,
+      status: current["status"] || "Pendente",
+      programa: current["programa"] || "Empire TV",
+      tipo: current["tipo"] || "Clipe",
+      material_tocando: current["material_tocando"] || "Música em Transmissão",
+      buff_rpg: current["buff_rpg"] || "Sem Buff Ativo"
     });
   }
 
@@ -212,7 +234,7 @@ function findActiveVideoInTimeline(timeline) {
   const currentMinute = localTime.getMinutes();
   const currentSeconds = localTime.getSeconds();
   
-  // Total de segundos decorridos hoje
+  // Total de segundos decorridos hoje na vida real
   const nowInSeconds = (currentHour * 3600) + (currentMinute * 60) + currentSeconds;
 
   let activeVideo = null;
@@ -225,13 +247,10 @@ function findActiveVideoInTimeline(timeline) {
     }
   }
 
-  // Se passou de todas as programações cadastradas, ou se ainda não começou a primeira, 
-  // nós colocamos rodando o primeiro vídeo ciclado (Loop do Bardo) ou o último para que a rádio nunca fique offline!
+  // Se passou de todas as programações cadastradas, nós ciclamo o sinal em loops dos programas
   if (!activeVideo) {
-    // Roda em modo de reprise cíclica do último slot cadastrado
     const lastItem = timeline[timeline.length - 1];
     if (nowInSeconds > lastItem.endInSeconds) {
-      // Repetir ciclo das músicas cadastradas
       const totalTimelineDuration = lastItem.endInSeconds - timeline[0].startInSeconds;
       const secSinceTimelineEnd = nowInSeconds - lastItem.endInSeconds;
       const relativeOffsetInSecs = secSinceTimelineEnd % totalTimelineDuration;
@@ -241,14 +260,13 @@ function findActiveVideoInTimeline(timeline) {
         const item = timeline[i];
         if (targetSec >= item.startInSeconds && targetSec < item.endInSeconds) {
           activeVideo = item;
-          // Retorna com offset relativo
           const seekOffset = targetSec - item.startInSeconds;
           return buildResponsePayload(activeVideo, seekOffset);
         }
       }
     }
     
-    // Se ainda está antes do primeiro evento do dia
+    // Se ainda está no começo do dia (antes de sintonizar a primeira transmissão)
     activeVideo = timeline[0];
   }
 
@@ -263,50 +281,127 @@ function findActiveVideoInTimeline(timeline) {
  * Estrutura o retorno final do vídeo ativo para o player
  */
 function buildResponsePayload(item, seekOffset) {
-  // Ajustar link do download do drive
-  const directUrl = getDirectDriveUrl(item.link_drive);
-
   return {
     status: "broadcasting",
+    rowNum: item.rowNum,
     programa: item.programa || "Programa do Bardo",
     tipo: item.tipo || "Geral",
     materialTocando: item.material_tocando || "Música no Ar",
     buff: item.buff_rpg || "+15% Stamina",
-    videoUrl: directUrl,
+    videoUrl: item.link_drive,
+    drive_video_id: item.drive_video_id,
     startedAt: item.horarioCalculado,
     durationSeconds: item.durationSeconds,
-    seekOffset: clampedOffsetForVideo(seekOffset, item.durationSeconds),
+    seekOffset: seekOffset < item.durationSeconds ? seekOffset : (seekOffset % item.durationSeconds),
     isBackup: false
   };
 }
 
 /**
- * Garante que o offset de tempo não ultrapasse a duração configurada do vídeo
+ * Rotina automática para marcar as linhas passadas como "Concluido" e a atual como "Transmitindo"
  */
-function clampedOffsetForVideo(offset, duration) {
-  if (offset >= duration) {
-    return offset % duration; // Reinicia em loop
+function atualizarLinhasTransmitidas(sheet, timeline, currentVideo) {
+  try {
+    if (!currentVideo || currentVideo.isBackup) return;
+
+    const rows = sheet.getDataRange().getValues();
+    const headers = rows[0];
+    const statusColIdx = headers.findIndex(h => String(h).trim().toLowerCase() === "status") + 1;
+    
+    if (statusColIdx <= 0) return;
+
+    const currentIdx = currentVideo.rowNum;
+    
+    // Atualiza o estado atual na planilha (Transmitindo)
+    if (currentIdx && currentIdx <= rows.length) {
+      const currentStatus = String(rows[currentIdx - 1][statusColIdx - 1]).trim().toLowerCase();
+      if (currentStatus !== "transmitindo" && currentStatus !== "concluido") {
+        sheet.getRange(currentIdx, statusColIdx).setValue("Transmitindo");
+      }
+    }
+
+    // Marca todos os outros vídeos anteriores como "Concluido"
+    nowInSeconds = getSecondsToday();
+    
+    timeline.forEach(item => {
+      if (item.rowNum !== currentIdx && item.rowNum <= rows.length) {
+        if (nowInSeconds > item.endInSeconds) {
+          const itemStatus = String(rows[item.rowNum - 1][statusColIdx - 1]).trim().toLowerCase();
+          if (itemStatus !== "concluido") {
+            sheet.getRange(item.rowNum, statusColIdx).setValue("Concluido");
+          }
+        }
+      }
+    });
+  } catch(e) {
+    Logger.log("Erro ao atualizar status automáticos: " + e);
   }
-  return offset;
 }
 
 /**
- * Converte links públicos de compartilhamento do Drive em links diretos para streaming sem bloqueios no player
+ * Limpa espontaneamente da planilha itens antigos ou já concluídos, para deixar as consultas leves!
  */
-function getDirectDriveUrl(url) {
-  if (!url) return "";
-  if (url.includes("docs.google.com/uc") || url.includes("drive.usercontent.google.com")) {
-    return url;
-  }
-  const regExp = /\/file\/d\/([^\/]+)|\/open\?id=([^\/&]+)|id=([^\/&]+)/;
-  const matches = url.match(regExp);
-  if (matches) {
-    const fileId = matches[1] || matches[2] || matches[3];
-    if (fileId) {
-      return "https://docs.google.com/uc?export=download&id=" + fileId;
+function limparProgramasVencidosSet(sheet) {
+  try {
+    const rows = sheet.getDataRange().getValues();
+    if (rows.length <= 1) return;
+    
+    const headers = rows[0];
+    const statusColIdx = headers.findIndex(h => String(h).trim().toLowerCase() === "status") + 1;
+    const horarioColIdx = headers.findIndex(h => String(h).trim().toLowerCase() === "horario") + 1;
+    
+    if (statusColIdx <= 0 || horarioColIdx <= 0) return;
+    
+    const nowInSeconds = getSecondsToday();
+    
+    // Varre em ordem decrescente para não quebrar os índices de linha ao deletar
+    for (let i = rows.length - 1; i >= 1; i--) {
+      const row = rows[i];
+      const statusVal = String(row[statusColIdx - 1]).trim().toLowerCase();
+      const horarioStr = String(row[horarioColIdx - 1]).trim();
+      
+      let deveApagar = false;
+      
+      // 1. Apaga se o status foi explicitamente marcado ou processado como Concluido
+      if (statusVal === "concluido" || statusVal === "concluído") {
+        deveApagar = true;
+      } else if (horarioStr) {
+        // 2. Apaga se já passou muito tempo do horário programado de hoje
+        try {
+          let timePart = "00:00";
+          if (horarioStr.includes(" ")) {
+            timePart = horarioStr.split(" ")[1];
+          } else if (!horarioStr.includes("-") && !horarioStr.includes("/")) {
+            timePart = horarioStr;
+          }
+          
+          const tParts = timePart.split(":");
+          const hours = parseInt(tParts[0] || "0", 10);
+          const minutes = parseInt(tParts[1] || "0", 10);
+          const itemStartSeconds = (hours * 3600) + (minutes * 60);
+          
+          const duracaoSec = parseInt(row[headers.findIndex(h => String(h).trim().toLowerCase() === "duracao_segundos")] || "600", 10);
+          
+          // Se já passou do final deste vídeo por mais de 30 minutos, exclui da planilha automaticamente
+          if (nowInSeconds > (itemStartSeconds + duracaoSec + 1800)) {
+            deveApagar = true;
+          }
+        } catch (err) {}
+      }
+      
+      if (deveApagar) {
+        sheet.deleteRow(i + 1);
+      }
     }
+  } catch(e) {
+    Logger.log("Erro na autolimpeza: " + e);
   }
-  return url;
+}
+
+function getSecondsToday() {
+  const now = new Date();
+  const localTime = new Date(now.toLocaleString("en-US", { timeZone: "America/Sao_Paulo" }));
+  return (localTime.getHours() * 3600) + (localTime.getMinutes() * 60) + localTime.getSeconds();
 }
 
 /**
@@ -323,91 +418,48 @@ function getProgramSheet() {
 
 /**
  * Popula a planilha com colunas e dados de exemplo modernos para facilitar o entendimento do usuário.
- * Também cria de forma inovadora uma aba exclusiva de Documentação no Google Sheets.
  */
 function initializeExampleData(sheet) {
   const ss = sheet.getParent();
   
-  // 1. Criar e preencher a aba de programação principal
-  const headers = ["Dia", "Horario", "Link_Drive", "Duracao_Segundos", "Programa", "Tipo", "Material_Tocando", "Buff_RPG"];
+  // Headers exatos projetados tanto para a automação quanto para o painel de TV
+  const headers = ["Drive_Video_ID", "Horario", "Status", "Programa", "Tipo", "Material_Tocando", "Buff_RPG", "Duracao_Segundos"];
   sheet.appendRow(headers);
   
   const now = new Date();
   const localTime = new Date(now.toLocaleString("en-US", { timeZone: "America/Sao_Paulo" }));
-  const dd = String(localTime.getDate()).padStart(2, "0");
-  const mm = String(localTime.getMonth() + 1).padStart(2, "0");
-  const yyyy = localTime.getFullYear();
-  const todayFormatted = dd + "/" + mm + "/" + yyyy; 
+  const todayYMD = localTime.getFullYear() + "-" + 
+                   String(localTime.getMonth() + 1).padStart(2, "0") + "-" + 
+                   String(localTime.getDate()).padStart(2, "0"); 
   
   const sample1 = [
-    todayFormatted, 
-    "00:00", 
-    "https://commondatastorage.googleapis.com/gtv-videos-bucket/sample/BigBuckBunny.mp4", 
-    "600",
+    "19uW7M0N-m6X9fB9CgI5gYcMhDpJvK9Y0", // ID fictício do Drive ou real compartilhado
+    todayYMD + " 00:00", 
+    "Pendente",
     "Sinfonia da Alvorada Arcana", 
     "Clipe", 
     "Town Hall Acoustic Theme", 
-    "+15 de Agilidade & +10% Regen de MP"
+    "+15 de Agilidade & +10% Regen de MP",
+    "600"
   ];
   
   const sample2 = [
-    todayFormatted, 
-    "00:00", // Notar: Têm o MESMO horário, então eles se enfileiram automaticamente!
-    "https://commondatastorage.googleapis.com/gtv-videos-bucket/sample/TearsOfSteel.mp4", 
-    "720",
+    "1W5tK9XyMvZpBoFhG9Rz7cMwPdLkW8g5N", 
+    todayYMD + " 00:10",
+    "Pendente",
     "Guerra de Clãs", 
     "Heavy Beats", 
     "Tears of Steel Synthwave Remix", 
-    "+20 de Foco e +5% Chance Crítica"
+    "+20 de Foco e +5% Chance Crítica",
+    "720"
   ];
 
   sheet.appendRow(sample1);
   sheet.appendRow(sample2);
   
-  // Estética para a de programação
+  // Estética do cabeçalho da planilha
   sheet.getRange(1, 1, 1, 8).setBackground("#8b5cf6").setFontColor("#ffffff").setFontWeight("bold");
   sheet.autoResizeColumns(1, 8);
-
-  // 2. Criar aba de Documentação e Manual (se ela ainda não existir)
-  let docSheet = ss.getSheetByName("Manual_Empire_TV");
-  if (!docSheet) {
-    docSheet = ss.insertSheet("Manual_Empire_TV");
-    
-    // Configurar o visual da Documentação
-    docSheet.getRange("A1:C1").merge().setValue("⚔️ MANUAL DE CONFIGURAÇÃO E INTEGRAÇÃO - EMPIRE TV & RÁDIO")
-      .setFontSize(14).setFontWeight("bold").setBackground("#229ED9").setFontColor("#ffffff").setHorizontalAlignment("center");
-    
-    docSheet.appendRow(["", "", ""]); // Linha vazia
-    docSheet.appendRow(["CÓDIGO DE COLUNA", "MANUAL DE CONFIGURAÇÃO: O QUE INSERIR NAS COLUNAS", "DICA DE OURO"]);
-    
-    // Guia das colunas
-    docSheet.appendRow(["A) Dia", "Define quando o programa vai rodar. Use a data exata DD/MM/YYYY (ex: " + todayFormatted + ") ou 'Todos' para repetir diariamente.", "Se colocar algum dia da semana (ex: 'segunda', 'terça'), rodará apenas neste respectivo dia."]);
-    docSheet.appendRow(["B) Horario", "Hora de início no formato de 24h HH:MM (ex: 14:00, 20:30, 00:00).", "Se cadastrar vários itens no mesmo horário, o sistema monta uma FILA sequencial empilhando as durações!"]);
-    docSheet.appendRow(["C) Link_Drive", "Link de visualização compartilhado do Google Drive ('Qualquer pessoa com o link pode ver') ou URL direta de um vídeo MP4.", "O player resolve links do Google Drive nativamente convertendo em streaming em tempo real!"]);
-    docSheet.appendRow(["D) Duracao_Segundos", "A duração exata do vídeo em segundos (ex: 600 para 10 minutos, 3600 para 1 hora).", "Importante colocar a duração correta para o alinhamento da fila e cálculo de sincronização perfeito."]);
-    docSheet.appendRow(["E) Programa", "Nome do Programa / Atração ativo na transmissão.", "Fica em destaque principal no player."]);
-    docSheet.appendRow(["F) Tipo", "O tipo do material que está sendo listado (ex: Clipe, Podcast, Gameplay, VOD).", "Fica exibido de forma estilizada ao lado do material."]);
-    docSheet.appendRow(["G) Material_Tocando", "O nome do material / música em execução no momento.", "Exibido logo abaixo do programa atual."]);
-    docSheet.appendRow(["H) Buff_RPG", "O buff de RPG que os membros ganham ao assistir à transmissão (ex: '+15% EXP').", "Alimenta a imersão temática e dá bônus virtuais destacados em verde piscante no player!"]);
-
-    docSheet.appendRow(["", "", ""]); // Linha vazia
-    docSheet.appendRow(["INTEGRAÇÃO TELEGRAM", "COMO CONFIGURAR SEU COMPATÍVEL TELEGRAM WEB APP (MINI APP)", "DETALHADO"]);
-    docSheet.appendRow(["Passo 1", "Abra o Telegram, procure pelo robô oficial @BotFather e envie o comando '/newbot' para criar o seu robô.", "Guarde o token HTTP de acesso fornecido por ele."]);
-    docSheet.appendRow(["Passo 2", "Agora envie o comando '/newapp' no chat com o BotFather.", "Ele perguntará qual bot gerenciará o app, selecione o robô recém-criado."]);
-    docSheet.appendRow(["Passo 3", "Insira o título e uma descrição rápida para o seu app de TV/Rádio do clã.", "Escolha e faça upload de uma foto de capa para o Mini App."]);
-    docSheet.appendRow(["Passo 4", "Quando o BotFather pedir a 'Web App URL', informe o link HTTPS gerado por este aplicativo de sintonia.", "DICA: O player é responsivo e encaixa de forma deslumbrante na janela nativa do celular pelo Telegram!"]);
-    docSheet.appendRow(["Passo 5", "Escolha um link curto de chamada (ex: aovivo). Pronto! Use o endereço t.me/SeuBot/aovivo para enviar nos clãs e grupos.", "Os guerreiros assistem à TV com buffet em alta fidelidade instantaneamente dentro do próprio Telegram!"]);
-
-    // Formatação visual do Manual
-    docSheet.getRange("A3:C3").setFontWeight("bold").setBackground("#e2e8f0").setHorizontalAlignment("left");
-    docSheet.getRange("A13:C13").setFontWeight("bold").setBackground("#e2e8f0").setHorizontalAlignment("left");
-    docSheet.getRange("A4:A11").setFontWeight("bold").setFontColor("#8b5cf6");
-    docSheet.getRange("A14:A18").setFontWeight("bold").setFontColor("#229ED9");
-    
-    docSheet.setColumnWidth(1, 150);
-    docSheet.setColumnWidth(2, 450);
-    docSheet.setColumnWidth(3, 400);
-  }
 }
 
 /**
