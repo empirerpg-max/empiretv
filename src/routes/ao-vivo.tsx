@@ -47,6 +47,8 @@ interface StreamChannel {
   nowPlaying: string;
   genre: string;
   buffBoost: string; // RPG status buff
+  durationSeconds?: number;
+  seekOffset?: number;
 }
 
 const CHANNELS: StreamChannel[] = [
@@ -95,6 +97,20 @@ const convertDriveLinkToDirect = (url: string) => {
   return url;
 };
 
+// Nova função utilitária para converter link do Drive compartilhável em link de visualização em Iframe
+const getDriveIframeUrl = (url: string) => {
+  if (!url) return "";
+  const regExp = /\/file\/d\/([^\/]+)|\/open\?id=([^\/&]+)|id=([^\/&]+)/;
+  const matches = url.match(regExp);
+  if (matches) {
+    const fileId = matches[1] || matches[2] || matches[3];
+    if (fileId) {
+      return `https://drive.google.com/file/d/${fileId}/preview`;
+    }
+  }
+  return "";
+};
+
 export default function AoVivoRoute() {
   // Estados para gerenciar o player
   const [currentChannel, setCurrentChannel] = useState<StreamChannel>(CHANNELS[0]);
@@ -115,7 +131,16 @@ export default function AoVivoRoute() {
   const [hasUnlockedReward, setHasUnlockedReward] = useState(false);
   const [copied, setCopied] = useState(false);
 
-   // Estados dos Sistemas de Agendamento (Planilha Google & Lista Local)
+  // Configurações do Iframe para Google Drive
+  const [useDriveIframe, setUseDriveIframe] = useState<boolean>(() => {
+    if (typeof window !== "undefined") {
+      const saved = localStorage.getItem("rpg_sonora_use_drive_iframe");
+      return saved !== "false"; // Padrão é true (compatível com arquivos grandes)
+    }
+    return true;
+  });
+
+  // Estados dos Sistemas de Agendamento (Planilha Google & Lista Local)
   const [scriptUrl, setScriptUrl] = useState(() => {
     return localStorage.getItem("rpg_sonora_script_url") || "https://script.google.com/macros/s/AKfycby7OeFYuai1QoTEXD427-Kn_2KBvh3nakD4iKSuOji9-i3x7sK8DD59BHRBRc5Ow1YB/exec";
   });
@@ -125,6 +150,8 @@ export default function AoVivoRoute() {
     return saved !== "false"; 
   });
   const [isSyncing, setIsSyncing] = useState(false);
+  const [sheetsSyncError, setSheetsSyncError] = useState<string | null>(null);
+  const [sheetsSyncSuccess, setSheetsSyncSuccess] = useState<boolean>(false);
   const [isDirectorPanelOpen, setIsDirectorPanelOpen] = useState(false);
   const [isAdmin, setIsAdmin] = useState(true);
   
@@ -178,6 +205,46 @@ export default function AoVivoRoute() {
   useEffect(() => {
     localStorage.setItem("rpg_sonora_local_program", JSON.stringify(localProgramList));
   }, [localProgramList]);
+
+  // Salvar preferência de Iframe no localStorage
+  useEffect(() => {
+    localStorage.setItem("rpg_sonora_use_drive_iframe", String(useDriveIframe));
+  }, [useDriveIframe]);
+
+  // Cronômetro virtual de progresso para quando o player de Iframe do Google Drive estiver ativo
+  useEffect(() => {
+    const driveIframeUrl = getDriveIframeUrl(currentChannel.url);
+    const isGoogleDriveLink = !!driveIframeUrl;
+
+    if (isGoogleDriveLink && useDriveIframe && isPlaying) {
+      // Duração em segundos recomendada do vídeo: usamos a informada pelo canal ou fallback de 15 minutos (900s) para grandes playlists
+      const duration = currentChannel.durationSeconds || 900;
+      
+      // Começamos o progresso com base na minutagem real (seekOffset) sintonizada via VOD-to-Live!
+      const initialSeconds = currentChannel.seekOffset || 0;
+      let elapsedSeconds = initialSeconds;
+
+      const interval = setInterval(() => {
+        elapsedSeconds += 1;
+        const pct = (elapsedSeconds / duration) * 100;
+        setVideoProgress(Math.min(pct, 100));
+
+        if (pct >= 80 && !hasUnlockedReward) {
+          const randomNum = Math.floor(1000000 + Math.random() * 9000000);
+          const code = `EMP-${randomNum}`;
+          setClaimableCode(code);
+          setHasUnlockedReward(true);
+
+          try {
+            const key = `claim_history_${currentChannel.nowPlaying || currentChannel.name}`;
+            localStorage.setItem(key, code);
+          } catch (err) {}
+        }
+      }, 1000);
+
+      return () => clearInterval(interval);
+    }
+  }, [currentChannel.url, useDriveIframe, isPlaying, currentChannel.durationSeconds, currentChannel.seekOffset, hasUnlockedReward]);
 
   // Sincroniza estado de recompensa ao trocar de canal/programa ativo
   useEffect(() => {
@@ -262,6 +329,16 @@ export default function AoVivoRoute() {
 
   // Função para inicializar o HLS Player com suporte a VOD-to-Live e offset de tempo
   const initPlayer = useCallback((streamUrl: string, forceFallback: boolean = false, seekOffset: number = 0) => {
+    // Se for link do Drive e useDriveIframe estiver ativo, o player físico de tag video não é necessário!
+    const driveIframeUrl = getDriveIframeUrl(streamUrl);
+    if (driveIframeUrl && useDriveIframe) {
+      setIsLoading(false);
+      setHasError(false);
+      setIsPlaying(true);
+      setIsUsingFallback(true);
+      return;
+    }
+
     const video = videoRef.current;
     if (!video) return;
 
@@ -406,23 +483,33 @@ export default function AoVivoRoute() {
         const response = await fetch(scriptUrl);
         const data = await response.json();
 
-        if (data && data.status === "success" && data.current) {
-          const stream = data.current;
-          if (stream.status === "broadcasting" && stream.videoUrl) {
+        if (data && data.status === "success") {
+          setSheetsSyncError(null);
+          setSheetsSyncSuccess(true);
+          
+          if (data.current) {
+            const stream = data.current;
             const finalVideoUrl = convertDriveLinkToDirect(stream.videoUrl);
+            const driveIframeUrl = getDriveIframeUrl(stream.videoUrl);
+            
+            // Para links do Drive, passamos o link original para podermos extrair o ID do iframe no player
+            const playerUrl = driveIframeUrl && useDriveIframe ? stream.videoUrl : finalVideoUrl;
+
             // Sintonizar a transmissão retornada pela planilha com o offset calculado pelo Google Script
             setCurrentChannel({
               id: "sheets_active",
               name: stream.title || "Canal Planilha",
-              url: finalVideoUrl,
+              url: playerUrl,
               fallbackUrl: finalVideoUrl,
               nowPlaying: stream.nowPlaying || "Música em Transmissão",
               genre: stream.description || "Programação Ordenada",
-              buffBoost: stream.buff || "Sem Buff Ativo"
+              buffBoost: stream.buff || "Sem Buff Ativo",
+              durationSeconds: parseInt(stream.durationSeconds || "600", 10),
+              seekOffset: stream.seekOffset || 0
             });
 
             // Sintoniza com o offset no player de vídeo
-            initPlayer(finalVideoUrl, false, stream.seekOffset || 0);
+            initPlayer(playerUrl, false, stream.seekOffset || 0);
 
             if (isManualRefresh) {
               setMessages(prev => [
@@ -442,10 +529,14 @@ export default function AoVivoRoute() {
             calculateLocalSchedule(isManualRefresh);
           }
         } else {
+          setSheetsSyncError(data.message || "Script retornou status de resposta malformado");
+          setSheetsSyncSuccess(false);
           calculateLocalSchedule(isManualRefresh);
         }
-      } catch (err) {
+      } catch (err: any) {
         console.error("Erro ao sincronizar com Google Sheets. Usando grade local.", err);
+        setSheetsSyncError(err?.toString() || "Erro de conexão ao acessar o Google Apps Script. Verifique permissões/CORS.");
+        setSheetsSyncSuccess(false);
         calculateLocalSchedule(isManualRefresh);
         if (isManualRefresh) {
           setMessages(prev => [
@@ -454,7 +545,7 @@ export default function AoVivoRoute() {
               id: Math.random().toString(),
               sender: "Erro_Guilda",
               role: "mod",
-              text: "⚠️ Falha ao ler a Planilha Google (verifique se publicou o script como Web App público). Usando grade local de emergência!",
+              text: "⚠️ Falha ao ler a Planilha Google (verifique se publicou o script como Web App público, 'Qualquer pessoa'). Usando grade de emergência!",
               timestamp: new Date().toLocaleTimeString("pt-BR", { hour: "2-digit", minute: "2-digit" }),
               guild: "Erro"
             }
@@ -467,7 +558,7 @@ export default function AoVivoRoute() {
       // Caso não esteja com a planilha ativa, roda a lógica do Calendário/Grade Local de Horários
       calculateLocalSchedule(isManualRefresh);
     }
-  }, [isGoogleSheetsActive, scriptUrl, localProgramList, initPlayer]);
+  }, [isGoogleSheetsActive, scriptUrl, localProgramList, initPlayer, useDriveIframe]);
 
   // Lógica local para decidir qual vídeo da lista local rodar com base no horário real de Brasília
   const calculateLocalSchedule = useCallback((isManualRefresh: boolean = false) => {
@@ -600,6 +691,15 @@ export default function AoVivoRoute() {
 
   // Controles manuais
   const togglePlay = () => {
+    const driveIframeUrl = getDriveIframeUrl(currentChannel.url);
+    const isGoogleDriveLink = !!driveIframeUrl;
+
+    if (isGoogleDriveLink && useDriveIframe) {
+      // Para o iframe do Drive, alternamos o estado de reprodução para guiar o timer do progresso de loot virtual
+      setIsPlaying(!isPlaying);
+      return;
+    }
+
     const video = videoRef.current;
     if (!video) return;
 
@@ -786,32 +886,43 @@ export default function AoVivoRoute() {
                 : "rounded-2xl border border-border/80 shadow-2xl aspect-video"
             }`}
           >
-            {/* O element video nativo */}
-            <video
-              ref={videoRef}
-              className={`w-full h-full object-cover ${isSmartTvMode ? "h-screen" : "aspect-video"}`}
-              playsInline
-              onClick={togglePlay}
-              onTimeUpdate={(e) => {
-                const video = e.currentTarget;
-                if (video.duration && video.duration > 0) {
-                  const pct = (video.currentTime / video.duration) * 100;
-                  setVideoProgress(pct);
-                  
-                  if (pct >= 80 && !hasUnlockedReward) {
-                    const randomNum = Math.floor(1000000 + Math.random() * 9000000);
-                    const code = `EMP-${randomNum}`;
-                    setClaimableCode(code);
-                    setHasUnlockedReward(true);
+            {/* Player de Vídeo clássico de mídias ou Iframe integrado do Google Drive */}
+            {getDriveIframeUrl(currentChannel.url) && useDriveIframe ? (
+              <iframe
+                id="drive-iframe-player"
+                src={`${getDriveIframeUrl(currentChannel.url)}${getDriveIframeUrl(currentChannel.url).includes("?") ? "&" : "?"}autoplay=1&mute=0`}
+                className={`w-full h-full border-0 absolute inset-0 bg-black ${isSmartTvMode ? "h-screen" : "aspect-video"}`}
+                allow="autoplay; encrypted-media; picture-in-picture"
+                allowFullScreen
+                referrerPolicy="no-referrer"
+              />
+            ) : (
+              <video
+                ref={videoRef}
+                className={`w-full h-full object-cover ${isSmartTvMode ? "h-screen" : "aspect-video"}`}
+                playsInline
+                onClick={togglePlay}
+                onTimeUpdate={(e) => {
+                  const video = e.currentTarget;
+                  if (video.duration && video.duration > 0) {
+                    const pct = (video.currentTime / video.duration) * 100;
+                    setVideoProgress(pct);
                     
-                    try {
-                      const key = `claim_history_${currentChannel.nowPlaying || currentChannel.name}`;
-                      localStorage.setItem(key, code);
-                    } catch(err) {}
+                    if (pct >= 80 && !hasUnlockedReward) {
+                      const randomNum = Math.floor(1000000 + Math.random() * 9000000);
+                      const code = `EMP-${randomNum}`;
+                      setClaimableCode(code);
+                      setHasUnlockedReward(true);
+                      
+                      try {
+                        const key = `claim_history_${currentChannel.nowPlaying || currentChannel.name}`;
+                        localStorage.setItem(key, code);
+                      } catch(err) {}
+                    }
                   }
-                }
-              }}
-            />
+                }}
+              />
+            )}
 
             {/* Overlay de Loading */}
             {isLoading && (
@@ -985,6 +1096,36 @@ export default function AoVivoRoute() {
 
           </div>
 
+          {/* Caixa de Diagnóstico e Compatibilidade de Google Drive (Sintonia Iframe Inteligente) */}
+          {getDriveIframeUrl(currentChannel.url) && !isSmartTvMode && (
+            <div className="bg-[#0f111e]/90 border border-primary/20 backdrop-blur-md p-3.5 rounded-2xl flex flex-col sm:flex-row items-center justify-between gap-4 text-xs w-full shadow-lg shadow-primary/5 transition-all text-left">
+              <div className="flex items-start gap-2.5">
+                <div className="p-2.5 bg-primary/10 border border-primary/20 text-primary rounded-xl shrink-0">
+                  <Tv className="w-5 h-5 animate-pulse" />
+                </div>
+                <div>
+                  <h4 className="font-bold text-white flex items-center gap-1.5 font-display text-[13px]">
+                    🛡️ Assistindo via Modo Compatibilidade do Google Drive
+                  </h4>
+                  <p className="text-zinc-400 text-[11px] leading-relaxed mt-0.5">
+                    Seu arquivo de vídeo é sintonizado via <strong>Player Oficial do Google Drive (Iframe)</strong>. Ele evita o aviso de vírus de arquivos grandes (&gt;100MB) de forma gratuita! Seu bônus de loot continua contando em segundo plano!
+                  </p>
+                </div>
+              </div>
+              <div className="flex items-center gap-3 shrink-0">
+                <span className="font-mono text-[10px] bg-zinc-800 border border-zinc-700 rounded-md px-2.5 py-1 text-zinc-300 font-bold">
+                  {useDriveIframe ? "Iframe do Drive Ativo" : "Nativo MP4 (Download)"}
+                </span>
+                <button
+                  onClick={() => setUseDriveIframe(!useDriveIframe)}
+                  className="px-3 py-1.5 bg-amber-500 hover:bg-amber-400 text-black font-extrabold rounded-lg font-mono text-[10px] uppercase cursor-pointer transition-all active:scale-95 shadow-md shadow-amber-500/10 hover:scale-105"
+                >
+                  {useDriveIframe ? "Mudar p/ Nativo" : "Ativar Modo Iframe"}
+                </button>
+              </div>
+            </div>
+          )}
+
           {/* Dados do Canal Abaixo do Player */}
           {!isSmartTvMode && (
             <div className="flex flex-col gap-4">
@@ -1119,11 +1260,11 @@ export default function AoVivoRoute() {
               </div>
 
               {/* Botão de força-sincronia */}
-              <div className="flex items-center gap-2">
+              <div className="flex items-center gap-2 font-mono">
                 <button
                   onClick={() => syncScheduledTransmission(true)}
                   disabled={isSyncing}
-                  className="px-5 py-2.5 text-xs font-bold font-mono rounded-xl cursor-pointer bg-primary text-white hover:bg-primary-hover active:scale-95 transition-all flex items-center gap-2 disabled:opacity-50 shadow-lg shadow-primary/20"
+                  className="px-5 py-2.5 text-xs font-bold rounded-xl cursor-pointer bg-primary text-white hover:bg-primary-hover active:scale-95 transition-all flex items-center gap-2 disabled:opacity-50 shadow-lg shadow-primary/20"
                 >
                   <RefreshCw className={`w-4 h-4 ${isSyncing ? "animate-spin" : ""}`} />
                   <span>{isSyncing ? "Sincronizando..." : "Sincronizar Planilha Agora"}</span>
@@ -1176,10 +1317,42 @@ export default function AoVivoRoute() {
                           ]);
                           syncScheduledTransmission(true);
                         }}
-                        className="px-4 bg-zinc-800 hover:bg-zinc-700 text-white rounded-xl text-xs font-bold border border-border cursor-pointer transition-all hover:scale-105 active:scale-95"
+                        className="px-4 bg-zinc-805 hover:bg-zinc-700 text-white rounded-xl text-xs font-bold border border-border cursor-pointer transition-all hover:scale-105 active:scale-95"
                       >
                         Salvar
                       </button>
+                    </div>
+
+                    {/* Exibe status da última sincronia com o Sheets */}
+                    <div className="mt-2 text-[11px] font-mono">
+                      {isSyncing ? (
+                        <div className="text-zinc-400 flex items-center gap-1.5 animate-pulse">
+                          <RefreshCw className="w-3.5 h-3.5 animate-spin" />
+                          <span>Consultando sinal do servidor da Planilha...</span>
+                        </div>
+                      ) : sheetsSyncError ? (
+                        <div className="text-red-400 bg-red-950/20 border border-red-900/40 rounded-lg p-2.5 flex items-start gap-1.5">
+                          <span className="shrink-0 mt-0.5">⚠️</span>
+                          <span className="leading-snug">
+                            <strong>Erro de Sinal:</strong> {sheetsSyncError}. <br />
+                            <span className="text-[10.5px] text-zinc-400 leading-normal block mt-1">
+                              Isso geralmente ocorre por CORS ou se a URL do Script está incorreta. Publique o Apps Script clicando no botão <strong>Implantar &gt; Nova Implantação &gt; Tipo: Web App (Executar como: Mim / Quem tem acesso: Qualquer pessoa)</strong>.
+                            </span>
+                          </span>
+                        </div>
+                      ) : sheetsSyncSuccess ? (
+                        <div className="text-emerald-400 bg-emerald-950/20 border border-emerald-950/35 rounded-lg p-2.5 flex items-center gap-2">
+                          <span className="flex h-2 w-2 relative">
+                            <span className="animate-ping absolute inline-flex h-full w-full rounded-full bg-emerald-400 opacity-75"></span>
+                            <span className="relative inline-flex rounded-full h-2 w-2 bg-emerald-500"></span>
+                          </span>
+                          <span>📶 Conexão de Sinal sintonizada e ativa com sucesso!</span>
+                        </div>
+                      ) : (
+                        <div className="text-zinc-500 text-[10px] italic">
+                          Frequência em monitoramento. Aguardando comando ou troca agendada de horas.
+                        </div>
+                      )}
                     </div>
                   </div>
                 </div>
@@ -1198,16 +1371,16 @@ export default function AoVivoRoute() {
                     </div>
                   </div>
 
-                  {/* Alerta de Vídeo do Google Drive */}
-                  <div className="border-t border-border/60 pt-2 text-[11px] text-amber-200/90 leading-relaxed text-left space-y-1">
-                    <p className="font-bold uppercase text-amber-400 flex items-center gap-1">
-                      ⚠️ LIMITAÇÕES DE VÍDEOS DO GOOGLE DRIVE:
+                  {/* Alerta de Vídeo do Google Drive com Nova Tecnologia Iframe */}
+                  <div className="border-t border-border/60 pt-3 mt-1.5 text-[11.5px] text-amber-200/90 leading-relaxed text-left space-y-1.5">
+                    <p className="font-bold uppercase text-amber-400 flex items-center gap-1.5">
+                      ⚔️ NOVIDADE: ASSISTA FILMES GRANDES DE GRAÇA!
                     </p>
                     <p>
-                      1. <strong>Privacidade:</strong> O arquivo de vídeo no seu Google Drive <strong>deve estar público</strong> ("Qualquer pessoa com o link pode ler") ou o player não conseguirá carregar os dados.
+                      Com o novo <strong>Modo Compatibilidade Iframe do Google Drive</strong>, arquivos maiores que 100MB são assistidos sem restrições de antivírus, de graça e sem custos adicionais!
                     </p>
                     <p>
-                      2. <strong>Aviso de Vírus (Arquivos Grandes):</strong> Se o seu vídeo for muito grande (normalmente maior que 100MB), o Google Drive exibirá uma tela de aviso impedindo o player de transmiti-lo de imediato. Para vídeos longos, recomendamos hospedar as mídias no Discord, GitHub ou algum outro serviço de hospedagem de arquivos diretos (<code className="text-white font-mono">.mp4</code> ou <code className="text-white font-mono">.m3u8</code>).
+                      O player detecta o formato automaticamente. Apenas certifique-se de definir o compartilhamento do vídeo no Drive para: <strong>"Qualquer pessoa com o link pode ver"</strong>!
                     </p>
                   </div>
                 </div>
@@ -1371,7 +1544,6 @@ export default function AoVivoRoute() {
             </div>
 
           </div>
-
         </section>
       </div>
       )}
