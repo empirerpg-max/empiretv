@@ -1,6 +1,6 @@
 import { useEffect, useRef, useState, useCallback } from "react";
 
-const API_URL = "https://script.google.com/macros/s/SEU_ID_DO_APPS_SCRIPT/exec";
+const API_URL = "https://script.google.com/macros/s/AKfycby7OeFYuai1QoTEXD427-Kn_2KBvh3nakD4iKSuOji9-i3x7sK8DD59BHRBRc5Ow1YB/exec";
 
 interface Transmission {
   status: string;
