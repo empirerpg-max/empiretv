@@ -1,4 +1,4 @@
-import { useState, useEffect, useRef, useCallback } from "react";
+import React, { useState, useEffect, useRef, useCallback, ChangeEvent, FormEvent } from "react";
 import Hls from "hls.js";
 import { 
   Play, 
@@ -30,7 +30,12 @@ import {
   Info,
   ExternalLink,
   HelpCircle,
-  RefreshCw
+  RefreshCw,
+  Gift,
+  Copy,
+  Lock,
+  Unlock,
+  X
 } from "lucide-react";
 
 // Mock de canais de streaming de código aberto (HLS)
@@ -47,21 +52,12 @@ interface StreamChannel {
 const CHANNELS: StreamChannel[] = [
   {
     id: "principal",
-    name: "Rádio Eldoria FM (Canal Principal)",
+    name: "Transmissão Oficial Empire (Estúdio Principal)",
     url: "https://test-streams.mux.dev/x36xhg/main.m3u8",
     fallbackUrl: "https://commondatastorage.googleapis.com/gtv-videos-bucket/sample/BigBuckBunny.mp4",
-    nowPlaying: "Big Buck Bunny Orchestral Theme - Bardic Edition",
-    genre: "Sinfônico RPG",
-    buffBoost: "+15 de Agilidade & +10% Regen de MP"
-  },
-  {
-    id: "coruja",
-    name: "Estúdio Tears of Steel (Canal Secundário)",
-    url: "https://demo.unified-streaming.com/k8s/features/stable/video/tears-of-steel/tears-of-steel.ism/.m3u8",
-    fallbackUrl: "https://commondatastorage.googleapis.com/gtv-videos-bucket/sample/TearsOfSteel.mp4",
-    nowPlaying: "Sci-Fi Synth Beats to Grind EXP To",
-    genre: "Retro Synth / Cyberpunk RPG",
-    buffBoost: "+20 de Foco & +5% de Chance de Acerto Crítico"
+    nowPlaying: "Exibição Especial da Aliança Empire",
+    genre: "Geral",
+    buffBoost: "XP Extra de Sintonia Ativo"
   }
 ];
 
@@ -75,11 +71,11 @@ interface ChatMessage {
 }
 
 const INITIAL_MESSAGES: ChatMessage[] = [
-  { id: "1", sender: "Valen_LâminaNegra", role: "player", text: "Alguém farmando na dungeon do Leste ouvindo essa rádio?", timestamp: "15:40", guild: "Fallen Kings" },
-  { id: "2", sender: "Bardo_Eldoriano", role: "bard", text: "Essa track de agora aumenta nossa agilidade! Sinto os bônus ativos!", timestamp: "15:41", guild: "Harpejos Dourados" },
-  { id: "3", sender: "Mago_Arcanista", role: "mage", text: "Estou recuperando MP 2x mais rápido com esse som. Incrível!", timestamp: "15:42", guild: "Ordem de Ferro" },
-  { id: "4", sender: "GM_Kael", role: "mod", text: "Bem-vindos à transmissão da emissora ao vivo! Hoje temos drop duplo para quem estiver na sintonia!", timestamp: "15:42", guild: "Staff" },
-  { id: "5", sender: "Lyra_VozSuave", role: "bard", text: "Lindo arranjo! Já salvei no meu grimório de partituras.", timestamp: "15:43", guild: "Harpejos Dourados" }
+  { id: "1", sender: "Rodrigo_VIP_Gold", role: "player", text: "Alguém aí na sintonia coletando os extras de hoje?", timestamp: "15:40", guild: "Empire Lions" },
+  { id: "2", sender: "Empire_Manager", role: "bard", text: "A programação de hoje foi toda atualizada via planilha!", timestamp: "15:41", guild: "Diretoria" },
+  { id: "3", sender: "Lucas_Chief", role: "mage", text: "Esse player de transmissão é liso demais pelo celular!", timestamp: "15:42", guild: "Capitães" },
+  { id: "4", sender: "Mod_Empire_01", role: "mod", text: "Bem-vindos à Empire TV! Deixem carregando para liberar seu loot extra!", timestamp: "15:42", guild: "Staff" },
+  { id: "5", sender: "Nath_VIP", role: "bard", text: "Já sintonizei aqui na TV e no celular para garantir o progresso de 80%!", timestamp: "15:43", guild: "Empire Lions" }
 ];
 
 export default function AoVivoRoute() {
@@ -96,15 +92,36 @@ export default function AoVivoRoute() {
   const [errorMessage, setErrorMessage] = useState("");
   const [isUsingFallback, setIsUsingFallback] = useState(false);
 
-  // Estados dos Sistemas de Agendamento (Planilha Google & Lista Local)
+  // Sistema de Recompensa de Sintonia (80% assistido)
+  const [videoProgress, setVideoProgress] = useState(0);
+  const [claimableCode, setClaimableCode] = useState<string | null>(null);
+  const [hasUnlockedReward, setHasUnlockedReward] = useState(false);
+  const [copied, setCopied] = useState(false);
+
+   // Estados dos Sistemas de Agendamento (Planilha Google & Lista Local)
   const [scriptUrl, setScriptUrl] = useState(() => {
-    return localStorage.getItem("rpg_sonora_script_url") || "";
+    return localStorage.getItem("rpg_sonora_script_url") || "https://script.google.com/macros/s/AKfycby7OeFYuai1QoTEXD427-Kn_2KBvh3nakD4iKSuOji9-i3x7sK8DD59BHRBRc5Ow1YB/exec";
   });
   const [isGoogleSheetsActive, setIsGoogleSheetsActive] = useState(() => {
-    return localStorage.getItem("rpg_sonora_use_sheets") === "true";
+    // Default to true so user gets sheets synchronisation out-of-the-box
+    const saved = localStorage.getItem("rpg_sonora_use_sheets");
+    return saved !== "false"; 
   });
   const [isSyncing, setIsSyncing] = useState(false);
   const [isDirectorPanelOpen, setIsDirectorPanelOpen] = useState(false);
+  const [isAdmin, setIsAdmin] = useState(false);
+  
+  // Estados para integração com Telegram Web App
+  const [dynamicLocation, setDynamicLocation] = useState<string>("");
+  const [copiedAppUrl, setCopiedAppUrl] = useState(false);
+  const [telegramSelectedTab, setTelegramSelectedTab] = useState<"passos" | "mock">("passos");
+
+  useEffect(() => {
+    if (typeof window !== "undefined") {
+      setDynamicLocation(window.location.origin + window.location.pathname);
+      setIsAdmin(new URLSearchParams(window.location.search).get("admin") === "true");
+    }
+  }, []);
 
   // Lista de grade de programação local para gerenciamento rápido (Salva no localStorage)
   const [localProgramList, setLocalProgramList] = useState<any[]>(() => {
@@ -138,6 +155,20 @@ export default function AoVivoRoute() {
   useEffect(() => {
     localStorage.setItem("rpg_sonora_local_program", JSON.stringify(localProgramList));
   }, [localProgramList]);
+
+  // Sincroniza estado de recompensa ao trocar de canal/programa ativo
+  useEffect(() => {
+    setVideoProgress(0);
+    const key = `claim_history_${currentChannel.nowPlaying || currentChannel.name}`;
+    const savedCode = localStorage.getItem(key);
+    if (savedCode) {
+      setClaimableCode(savedCode);
+      setHasUnlockedReward(true);
+    } else {
+      setClaimableCode(null);
+      setHasUnlockedReward(false);
+    }
+  }, [currentChannel]);
 
   // Referências para DOM
   const videoRef = useRef<HTMLVideoElement | null>(null);
@@ -638,22 +669,21 @@ export default function AoVivoRoute() {
   return (
     <div className="min-h-screen bg-background text-foreground flex flex-col font-sans transition-colors duration-300">
       
-      {/* 1. Header do RPG Musical (Sutil e Elegante) */}
+      {/* 1. Header do EMPIRE TV (Sutil e Elegante) */}
       {!isSmartTvMode && (
-        <header className="border-b border-border bg-card/60 backdrop-blur-md sticky top-0 z-40 px-4 py-3 flex items-center justify-between transition-all">
+        <header className="border-b border-border bg-card/40 backdrop-blur-md sticky top-0 z-40 px-4 py-3 flex items-center justify-between transition-all">
           <div className="flex items-center gap-3">
-            {/* Logo do Musical RPG com Fallback SVG de Altíssima Qualidade */}
             <div className="flex items-center gap-2">
               <div className="relative flex items-center justify-center w-10 h-10 rounded-xl bg-primary/20 border border-primary/40 text-primary">
-                <Music className="w-5 h-5 animate-bounce" />
-                <span className="absolute -top-1 -right-1 w-3 h-3 bg-accent rounded-full animate-ping" />
+                <Tv2 className="w-5 h-5 animate-pulse" />
+                <span className="absolute -top-1 -right-1 w-2.5 h-2.5 bg-emerald-500 rounded-full animate-ping" />
               </div>
               <div className="hidden sm:block">
-                <h1 className="text-lg font-bold font-display tracking-tight text-transparent bg-clip-text bg-gradient-to-r from-primary to-secondary">
-                  SONORA RPG
+                <h1 className="text-lg font-black tracking-wider text-white">
+                  EMPIRE TV
                 </h1>
-                <p className="text-[10px] font-mono text-muted-foreground uppercase tracking-widest">
-                  Transmissão ao Vivo do Reino
+                <p className="text-[10px] font-mono text-primary font-bold uppercase tracking-widest truncate max-w-[200px]" title={currentChannel.name}>
+                  🟢 {currentChannel.name}
                 </p>
               </div>
             </div>
@@ -689,6 +719,18 @@ export default function AoVivoRoute() {
               <Tv className="w-4 h-4" />
               <span className="hidden md:inline">Modo Smart TV</span>
             </button>
+
+            {/* Painel do Diretor - Controle de Sincronia discreto (Apenas visível se for admin) */}
+            {isAdmin && (
+              <button 
+                onClick={() => setIsDirectorPanelOpen(true)}
+                className="flex items-center gap-2 px-3 py-1.5 rounded-lg text-xs font-medium border border-[#1d1e3d] hover:border-zinc-700 bg-[#161a2b] text-zinc-300 hover:text-white transition-all cursor-pointer"
+                title="Painel do Diretor (Configuração de Planilha e Integração)"
+              >
+                <Settings className="w-4 h-4 text-[#229ED9]" />
+                <span className="hidden md:inline font-mono">Sincronia ⚙️</span>
+              </button>
+            )}
           </div>
         </header>
       )}
@@ -715,6 +757,25 @@ export default function AoVivoRoute() {
               className={`w-full h-full object-cover ${isSmartTvMode ? "h-screen" : "aspect-video"}`}
               playsInline
               onClick={togglePlay}
+              onTimeUpdate={(e) => {
+                const video = e.currentTarget;
+                if (video.duration && video.duration > 0) {
+                  const pct = (video.currentTime / video.duration) * 100;
+                  setVideoProgress(pct);
+                  
+                  if (pct >= 80 && !hasUnlockedReward) {
+                    const randomNum = Math.floor(1000000 + Math.random() * 9000000);
+                    const code = `EMP-${randomNum}`;
+                    setClaimableCode(code);
+                    setHasUnlockedReward(true);
+                    
+                    try {
+                      const key = `claim_history_${currentChannel.nowPlaying || currentChannel.name}`;
+                      localStorage.setItem(key, code);
+                    } catch(err) {}
+                  }
+                }
+              }}
             />
 
             {/* Overlay de Loading */}
@@ -850,27 +911,16 @@ export default function AoVivoRoute() {
                 </div>
 
                 <div className="flex items-center gap-3">
-                  {/* Seletor de Transmissões / Qualidades no rodapé */}
-                  <div className="flex items-center gap-1 bg-zinc-900 border border-border rounded-lg p-1">
-                    {CHANNELS.map((chan) => (
-                      <button
-                        key={chan.id}
-                        onClick={() => setCurrentChannel(chan)}
-                        className={`px-2.5 py-1 text-[10px] font-mono rounded cursor-pointer transition-all ${
-                          currentChannel.id === chan.id
-                            ? "bg-primary text-white font-bold"
-                            : "text-zinc-400 hover:text-white hover:bg-zinc-800"
-                        }`}
-                      >
-                        {chan.id === "principal" ? "Estúdio A" : "Estúdio B"}
-                      </button>
-                    ))}
+                  {/* Badge de sinal ativo da planilha */}
+                  <div className="hidden sm:flex items-center gap-1.5 px-2.5 py-1 bg-emerald-500/15 border border-emerald-500/20 text-emerald-400 rounded-lg text-[10px] font-mono">
+                    <span className="w-1.5 h-1.5 bg-emerald-400 rounded-full animate-ping" />
+                    <span>SINAL PLANILHA ONLINE</span>
                   </div>
 
                   {/* Tela Cheia Nativa */}
                   <button 
                     onClick={toggleFullscreen}
-                    className="p-2 text-gray-300 hover:text-white transition-all cursor-pointer"
+                    className="p-5 text-gray-300 hover:text-white transition-all cursor-pointer"
                     title="Tela Cheia"
                   >
                     <Maximize className="w-5 h-5" />
@@ -884,185 +934,168 @@ export default function AoVivoRoute() {
 
           {/* Dados do Canal Abaixo do Player */}
           {!isSmartTvMode && (
-            <div className="bg-card border border-border p-4 rounded-2xl flex flex-col md:flex-row items-start md:items-center justify-between gap-4">
-              <div>
-                <div className="flex items-center gap-2 mb-1">
-                  <span className="w-2 h-2 rounded-full bg-primary" />
-                  <span className="font-mono text-xs text-primary font-bold tracking-wider uppercase">
-                    Estação Atual: {currentChannel.genre}
-                  </span>
+            <div className="flex flex-col gap-4">
+              <div className="bg-card border border-border p-4 rounded-2xl flex flex-col md:flex-row items-start md:items-center justify-between gap-4">
+                <div>
+                  <div className="flex items-center gap-2 mb-1">
+                    <span className="w-2 h-2 rounded-full bg-primary animate-pulse" />
+                    <span className="font-mono text-xs text-primary font-bold tracking-wider uppercase">
+                      Programa Atual: {currentChannel.genre}
+                    </span>
+                  </div>
+                  <h2 className="text-xl font-bold font-display tracking-tight text-white mb-1">
+                    {currentChannel.name}
+                  </h2>
                 </div>
-                <h2 className="text-xl font-bold font-display tracking-tight text-white mb-1">
-                  {currentChannel.name}
-                </h2>
-                <p className="text-xs text-muted-foreground">
-                  Alimentado por servidores de streaming HLS fluidos. Desfrute de transmissões musicais contínuas para guiar suas missões de RPG em qualquer dispositivo.
-                </p>
               </div>
 
-              {/* RPG Stats Buff Info Card */}
-              <div className="w-full md:w-auto bg-muted border border-border p-3 rounded-xl flex items-center gap-3">
-                <div className="p-2 bg-emerald-500/10 border border-emerald-500/20 text-emerald-400 rounded-lg">
-                  <Sparkles className="w-5 h-5" />
+              {/* Novo Sistema de Recompensa RPG (80% assistido) */}
+              <div className="relative overflow-hidden bg-gradient-to-r from-card to-card/90 border border-border rounded-2xl p-5 shadow-lg">
+                <div className="absolute top-0 right-0 w-40 h-40 bg-primary/5 rounded-full blur-3xl pointer-events-none" />
+                
+                <div className="flex flex-col md:flex-row md:items-center justify-between gap-4">
+                  <div className="flex items-center gap-3.5">
+                    <div className={`p-3 rounded-xl flex items-center justify-center transition-all ${
+                      hasUnlockedReward 
+                        ? "bg-amber-500/20 border border-amber-500/40 text-amber-400 animate-pulse shadow-lg shadow-amber-500/10" 
+                        : "bg-zinc-800/80 border border-border text-zinc-400"
+                    }`}>
+                      {hasUnlockedReward ? <Gift className="w-6 h-6 animate-bounce" /> : <Lock className="w-5 h-5 z-10" />}
+                    </div>
+                    <div>
+                      <h3 className="text-sm font-bold text-white font-display flex items-center gap-2">
+                        {hasUnlockedReward ? "🎉 Recompensa de Sintonia Disponível!" : "🎁 Vem pegar seu extra"}
+                      </h3>
+                      <p className="text-xs text-muted-foreground mt-0.5">
+                        {hasUnlockedReward 
+                          ? "Você sintonizou a rádio por bastante tempo e desbloqueou seu loot lendário!" 
+                          : "Assista pelo menos 80% da transmissão ativa para liberar seu código especial de recompensa."}
+                      </p>
+                    </div>
+                  </div>
+
+                  {/* Mostrador do Progresso ou do Código */}
+                  <div className="min-w-[180px] flex flex-col gap-2">
+                    <div className="flex items-center justify-between text-[11px] font-mono text-muted-foreground">
+                      <span>{hasUnlockedReward ? "Código Disponível" : "Progresso"}</span>
+                      <span className="font-bold text-foreground">
+                        {videoProgress.toFixed(0)}% / 80%
+                      </span>
+                    </div>
+
+                    {/* Barra de Progresso */}
+                    <div className="w-full bg-zinc-900 h-2 rounded-full overflow-hidden border border-border p-[1px]">
+                      <div 
+                        className={`h-full rounded-full transition-all duration-300 ${
+                          hasUnlockedReward 
+                            ? "bg-gradient-to-r from-amber-500 to-yellow-400 animate-pulse" 
+                            : "bg-primary"
+                        }`}
+                        style={{ width: `${Math.min((videoProgress / 80) * 100, 100)}%` }}
+                      />
+                    </div>
+                  </div>
                 </div>
-                <div>
-                  <h4 className="text-xs font-mono text-muted-foreground uppercase tracking-wider">
-                    Bônus de Sintonia
-                  </h4>
-                  <p className="text-sm font-bold text-emerald-400 font-mono">
-                    {currentChannel.buffBoost}
-                  </p>
-                </div>
+
+                {/* Exibição do Código Desbloqueado */}
+                {hasUnlockedReward && claimableCode && (
+                  <div className="mt-4 pt-4 border-t border-border/60 flex flex-col sm:flex-row items-center justify-between gap-3 bg-amber-500/5 -mx-5 -mb-5 p-5 rounded-b-2xl border-amber-500/10">
+                    <div className="flex items-center gap-2.5">
+                      <span className="bg-amber-500/10 text-amber-400 px-2 py-0.5 rounded text-[10px] uppercase font-mono font-bold tracking-wider">
+                        LOOT EXCLUSIVO
+                      </span>
+                      <div className="text-sm font-mono font-bold tracking-widest text-amber-300 bg-black/45 px-3 py-1.5 rounded-xl border border-amber-500/25 select-all">
+                        {claimableCode}
+                      </div>
+                    </div>
+
+                    <button
+                      onClick={() => {
+                        try {
+                          navigator.clipboard.writeText(claimableCode);
+                          setCopied(true);
+                          setTimeout(() => setCopied(false), 2000);
+                        } catch(err) {
+                          alert(`Código: ${claimableCode}`);
+                        }
+                      }}
+                      className="px-4 py-2 bg-amber-500 hover:bg-amber-400 text-black font-bold font-mono text-xs rounded-xl flex items-center gap-2 transition-all cursor-pointer shadow-lg shadow-amber-500/20 hover:scale-105 active:scale-95"
+                    >
+                      <Copy className="w-3.5 h-3.5" />
+                      <span>{copied ? "Copiado! 📋" : "Copiar Código"}</span>
+                    </button>
+                  </div>
+                )}
               </div>
             </div>
           )}
 
         </div>
 
-        {/* Lado Direito: Live Chat e Feed RPG */}
-        {!isSmartTvMode && showChat && (
-          <div className="w-full lg:w-80 bg-card border border-border rounded-2xl flex flex-col h-[400px] lg:h-auto overflow-hidden">
-            {/* Header do Chat */}
-            <div className="px-4 py-3 border-b border-border bg-muted/40 flex items-center justify-between">
-              <div className="flex items-center gap-2">
-                <MessageSquare className="w-4 h-4 text-primary" />
-                <span className="text-xs font-bold uppercase tracking-wider font-mono">
-                  Chat da Guilda Geral
-                </span>
-              </div>
-              <div className="flex items-center gap-1.5 px-2 py-0.5 bg-primary/20 text-primary border border-primary/30 rounded text-[9px] font-mono">
-                LIVE RELAY
-              </div>
-            </div>
-
-            {/* Feed de Mensagens Rolável */}
-            <div className="flex-1 overflow-y-auto p-3 space-y-3 max-h-[290px] lg:max-h-none">
-              {messages.map((msg) => (
-                <div key={msg.id} className="text-xs flex flex-col gap-0.5 bg-muted/40 p-2 rounded-xl border border-border/40 hover:border-border/80 transition-all">
-                  <div className="flex items-center justify-between">
-                    <div className="flex items-center gap-1">
-                      {msg.role === "mod" ? (
-                        <span className="px-1.5 py-0.2 bg-red-600 text-white rounded text-[8px] font-black uppercase tracking-widest leading-normal">
-                          MOD
-                        </span>
-                      ) : msg.role === "bard" ? (
-                        <span className="px-1.5 py-0.2 bg-primary text-white rounded text-[8px] font-bold uppercase tracking-widest leading-normal">
-                          BARDO
-                        </span>
-                      ) : (
-                        <span className="px-1 py-0.2 bg-zinc-850 text-muted-foreground rounded text-[8px] font-mono">
-                          {msg.guild}
-                        </span>
-                      )}
-                      <span className="font-bold text-foreground font-mono truncate max-w-[120px]">
-                        {msg.sender}
-                      </span>
-                    </div>
-                    <span className="text-[10px] text-muted-foreground font-mono">{msg.timestamp}</span>
-                  </div>
-                  <p className="text-gray-300 break-words mt-1 leading-relaxed">
-                    {msg.text}
-                  </p>
-                </div>
-              ))}
-              <div ref={chatBottomRef} />
-            </div>
-
-            {/* Input Form do Chat */}
-            <form onSubmit={handleSendMessage} className="p-3 border-t border-border bg-muted/20">
-              <div className="relative">
-                <input
-                  type="text"
-                  placeholder="Escreva sua mensagem na guilda..."
-                  value={newMessage}
-                  onChange={(e) => setNewMessage(e.target.value)}
-                  className="w-full bg-zinc-910 outline-none text-xs rounded-xl pl-3 pr-10 py-2.5 border border-border focus:border-primary text-white font-sans transition-all"
-                />
-                <button
-                  type="submit"
-                  className="absolute right-1 top-1 bottom-1 px-3 bg-primary hover:bg-primary-hover text-white rounded-lg transition-all flex items-center justify-center cursor-pointer"
-                  title="Enviar"
-                >
-                  <Send className="w-3.5 h-3.5" />
-                </button>
-              </div>
-            </form>
-          </div>
-        )}
-
       </main>
 
-      {/* 3. PAINEL DO DIRETOR: GRADE DE TRANSMISSÃO E AGENDAMENTO (OCULTO NO MODO SMART TV) */}
-      {!isSmartTvMode && (
-        <section className="max-w-7xl mx-auto w-full px-4 pb-12 mt-4">
-          <div className="bg-card border border-border rounded-3xl p-6 shadow-xl relative overflow-hidden">
+      {/* 3. MODAL DE CONFIGURAÇÃO DO DIRETOR (SÓ ABRE QUANDO CLICADO NO BOTÃO SINC DA DIRETORIA E SE FOR ADMIN) */}
+      {isAdmin && isDirectorPanelOpen && (
+        <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/80 backdrop-blur-sm p-4">
+          <section className="bg-[#0b0c16] border border-[#1d1e3d] rounded-3xl p-6 shadow-2xl relative max-w-xl w-full text-left font-sans animate-in fade-in zoom-in-95 duration-200 overflow-y-auto max-h-[90vh]">
+            <div className="bg-card p-2 relative overflow-hidden">
+              {/* Botão Fechar Modal */}
+              <button 
+                onClick={() => setIsDirectorPanelOpen(false)}
+                className="absolute top-2 right-2 z-10 text-zinc-400 hover:text-white p-1.5 hover:bg-zinc-800 rounded-lg transition-all cursor-pointer"
+              >
+                <X className="w-5 h-5" />
+              </button>
             <div className="absolute top-0 right-0 w-80 h-80 bg-primary/5 rounded-full blur-3xl pointer-events-none" />
-            <div className="absolute bottom-0 left-0 w-80 h-80 bg-accent/5 rounded-full blur-3xl pointer-events-none" />
+            <div className="absolute bottom-0 left-0 w-80 h-80 bg-secondary/5 rounded-full blur-3xl pointer-events-none" />
 
             {/* Cabeçalho do Painel */}
             <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-4 border-b border-border pb-5 mb-6">
               <div className="flex items-center gap-3">
-                <div className="p-2.5 bg-primary/20 border border-primary/30 rounded-xl text-primary">
-                  <Settings className="w-5 h-5 animate-spin-slow" />
+                <div className="p-2.5 bg-primary/20 border border-primary/30 rounded-xl text-primary font-bold">
+                  <Settings className="w-5 h-5 animate-pulse" />
                 </div>
                 <div>
                   <h3 className="text-lg font-bold text-white font-display">
-                    ⚙️ Painel do Diretor de Transmissão (VOD-to-Live)
+                    ⚙️ Sincronização & Central de Controle Empire
                   </h3>
                   <p className="text-xs text-muted-foreground">
-                    Gerencie os horários, dias e links de vídeos para que a rádio mude de vídeo sozinha e em tempo real!
+                    Sua transmissão de TV é totalmente automatizada a partir da planilha. Configure o sinal e acesse o guia de colunas abaixo.
                   </p>
                 </div>
               </div>
 
-              {/* Botões do Painel Principal */}
+              {/* Botão de força-sincronia */}
               <div className="flex items-center gap-2">
-                <button
-                  onClick={() => {
-                    setIsGoogleSheetsActive(!isGoogleSheetsActive);
-                    localStorage.setItem("rpg_sonora_use_sheets", String(!isGoogleSheetsActive));
-                  }}
-                  className={`px-4 py-2 text-xs font-bold font-mono rounded-xl cursor-pointer border transition-all flex items-center gap-2 ${
-                    isGoogleSheetsActive
-                      ? "bg-emerald-600/20 text-emerald-400 border-emerald-500/50 hover:bg-emerald-600/30"
-                      : "bg-muted text-muted-foreground border-border hover:text-white"
-                  }`}
-                >
-                  <Database className="w-4 h-4" />
-                  <span>PLANILHA: {isGoogleSheetsActive ? "SINCRO_ON" : "LOCAL_ON"}</span>
-                </button>
-
                 <button
                   onClick={() => syncScheduledTransmission(true)}
                   disabled={isSyncing}
-                  className="px-4 py-2 text-xs font-bold font-mono rounded-xl cursor-pointer bg-primary text-white hover:bg-primary-hover active:scale-95 transition-all flex items-center gap-2 disabled:opacity-50"
+                  className="px-5 py-2.5 text-xs font-bold font-mono rounded-xl cursor-pointer bg-primary text-white hover:bg-primary-hover active:scale-95 transition-all flex items-center gap-2 disabled:opacity-50 shadow-lg shadow-primary/20"
                 >
                   <RefreshCw className={`w-4 h-4 ${isSyncing ? "animate-spin" : ""}`} />
-                  <span>{isSyncing ? "Sincronizando..." : "Atualizar Sinal"}</span>
+                  <span>{isSyncing ? "Sincronizando..." : "Sincronizar Planilha Agora"}</span>
                 </button>
               </div>
             </div>
 
-            {/* Abas e Configuração de Planilha do Google */}
-            <div className="grid grid-cols-1 lg:grid-cols-12 gap-8">
-              
-              {/* Esquerda: Configurações Técnicas e Adição de Item */}
-              <div className="lg:col-span-5 flex flex-col gap-6">
+            {/* Configurações de Transmissão por Planilha e Telegram */}
+            <div className="grid grid-cols-1 xl:grid-cols-2 gap-6">
 
-                {/* Bloco do Integrador Planilha Google */}
-                <div className="bg-muted/40 border border-border p-5 rounded-2xl">
-                  <div className="flex items-center gap-2 mb-3">
-                    <Database className="text-primary w-4 h-4" />
+              {/* Bloco do Integrador Planilha Google */}
+              <div className="bg-muted/45 border border-[#1d1e3d] p-5 rounded-2xl flex flex-col justify-between">
+                <div>
+                  <div className="flex items-center gap-2.5 mb-3">
+                    <Database className="text-primary w-5 h-5 animate-pulse" />
                     <h4 className="text-xs font-bold uppercase tracking-wider font-mono text-gray-200">
-                      Integração com Planilha de Horérios (Google Sheets)
+                      Sincronização Ativa da Planilha (Google Apps Script)
                     </h4>
                   </div>
-                  <p className="text-xs text-muted-foreground mb-4 leading-relaxed">
-                    Selecione esta opção para ler a grade de vídeos compartilhados do Drive de forma dinâmica. Para ativar, cole o endpoint gerado por seu <strong>Google Apps Script</strong>:
+                  <p className="text-xs text-muted-foreground mb-4 leading-relaxed font-sans">
+                    Insira o link gerado após hospedar e publicar o seu <strong>Google Apps Script</strong> (Web App). O sistema lerá os vídeos, horários e títulos agendados em tempo real de forma síncrona:
                   </p>
 
                   <div className="flex flex-col gap-2">
-                    <label className="text-[10px] font-mono text-muted-foreground uppercase">Link do Web App do Scripts:</label>
+                    <label className="text-[10px] font-mono text-muted-foreground uppercase">Link do Web App:</label>
                     <div className="flex gap-2">
                       <input
                         type="url"
@@ -1072,7 +1105,7 @@ export default function AoVivoRoute() {
                           setScriptUrl(e.target.value);
                           localStorage.setItem("rpg_sonora_script_url", e.target.value);
                         }}
-                        className="flex-1 bg-zinc-910 text-xs rounded-xl px-3 py-2 border border-border focus:border-primary text-white outline-none"
+                        className="flex-1 bg-zinc-900/95 text-xs rounded-xl px-3.5 py-2.5 border border-border focus:border-primary text-white outline-none font-mono"
                       />
                       <button
                         onClick={() => {
@@ -1081,308 +1114,193 @@ export default function AoVivoRoute() {
                             ...prev,
                             {
                               id: Math.random().toString(),
-                              sender: "Diretor_Bardo",
+                              sender: "Empire_System",
                               role: "mod",
-                              text: "💾 Link do Google Apps Script salvo com sucesso! Reiniciando rádio...",
+                              text: "💾 Endpoint de sincronização salvo! Atualizando canais e tocando programação...",
                               timestamp: new Date().toLocaleTimeString("pt-BR", { hour: "2-digit", minute: "2-digit" }),
                               guild: "Sistema"
                             }
                           ]);
                           syncScheduledTransmission(true);
                         }}
-                        className="px-3 bg-zinc-800 hover:bg-zinc-750 text-white rounded-xl text-xs font-bold border border-border cursor-pointer transition-all"
+                        className="px-4 bg-zinc-800 hover:bg-zinc-700 text-white rounded-xl text-xs font-bold border border-border cursor-pointer transition-all hover:scale-105 active:scale-95"
                       >
                         Salvar
                       </button>
                     </div>
                   </div>
-
-                  {/* Alerta de status da Planilha */}
-                  <div className="mt-4 p-3 bg-primary/5 border border-primary/20 rounded-xl flex items-start gap-2.5 text-xs">
-                    <Info className="w-4 h-4 text-primary shrink-0 mt-0.5" />
-                    <div className="text-muted-foreground space-y-1">
-                      <span>Para usar o método da planilha, criamos o arquivo completo <code className="text-primary font-mono select-all">/google-apps-script.js</code> no seu projeto. Copie-o e cole no script.google.com!</span>
-                    </div>
-                  </div>
                 </div>
 
-                {/* Form para Adicionar Vídeo Manual na Grade Local */}
-                <div className="bg-muted/40 border border-border p-5 rounded-2xl">
-                  <div className="flex items-center gap-2 mb-3">
-                    <Plus className="text-primary w-4 h-4 animate-bounce" />
-                    <h4 className="text-xs font-bold uppercase tracking-wider font-mono text-gray-200">
-                      Adicionar Programa à Grade Local (Offline)
-                    </h4>
+                {/* Info Box */}
+                <div className="mt-6 p-3 bg-primary/5 border border-primary/20 rounded-xl flex items-start gap-2.5 text-xs">
+                  <Info className="w-4 h-4 text-primary shrink-0 mt-0.5" />
+                  <div className="text-muted-foreground space-y-1 text-left">
+                    <span>Configure sua planilha com uma aba chamada <code className="text-primary font-mono select-all">Programacao_RPG</code>. Encontre o código completo no arquivo <code className="text-white select-all font-bold">/google-apps-script.js</code> no seu projeto.</span>
                   </div>
-                  <p className="text-xs text-muted-foreground mb-4">
-                    Cadastre vídeos para rodar de forma síncrona diretamente no navegador!
-                  </p>
-
-                  <form
-                    onSubmit={(e) => {
-                      e.preventDefault();
-                      const form = e.currentTarget;
-                      const day = (form.elements.namedItem("progDay") as HTMLSelectElement).value;
-                      const time = (form.elements.namedItem("progTime") as HTMLInputElement).value;
-                      const driveLink = (form.elements.namedItem("progLink") as HTMLInputElement).value;
-                      const title = (form.elements.namedItem("progTitle") as HTMLInputElement).value;
-                      const desc = (form.elements.namedItem("progDesc") as HTMLInputElement).value;
-                      const song = (form.elements.namedItem("progSong") as HTMLInputElement).value;
-                      const buff = (form.elements.namedItem("progBuff") as HTMLInputElement).value;
-
-                      if (!time || !driveLink || !title) {
-                        alert("Por favor, preencha o Horário de Início, o Título e o Link do Vídeo!");
-                        return;
-                      }
-
-                      const newItem = {
-                        dia: day,
-                        horario: time,
-                        link_drive: driveLink,
-                        titulo: title,
-                        descricao: desc || "Transmissão sem descrição descrita pelo clã",
-                        musica_atual: song || "Faixa Padrão",
-                        buff_rpg: buff || "+5 de EXP Passivo"
-                      };
-
-                      setLocalProgramList(prev => [...prev, newItem].sort((a, b) => a.horario.localeCompare(b.horario)));
-                      form.reset();
-
-                      setMessages(prev => [
-                        ...prev,
-                        {
-                          id: Math.random().toString(),
-                          sender: "Guia_Sonora_BOT",
-                          role: "bard",
-                          text: `🎮 Nova transmissão '${title}' agendada com sucesso para as ${time}!`,
-                          timestamp: new Date().toLocaleTimeString("pt-BR", { hour: "2-digit", minute: "2-digit" }),
-                          guild: "Agenda"
-                        }
-                      ]);
-
-                      // Recalcula horário e sintoniza
-                      setTimeout(() => syncScheduledTransmission(false), 200);
-                    }}
-                    className="flex flex-col gap-3.5 text-xs text-left"
-                  >
-                    <div className="grid grid-cols-2 gap-3">
-                      <div className="flex flex-col gap-1">
-                        <label className="text-[10px] font-mono text-muted-foreground uppercase">Dia da Semana:</label>
-                        <select
-                          name="progDay"
-                          className="bg-zinc-910 p-2 rounded-xl border border-border focus:border-primary text-white outline-none"
-                        >
-                          <option value="Todos">Todos os Dias</option>
-                          <option value="segunda">Segunda-feira</option>
-                          <option value="terça">Terça-feira</option>
-                          <option value="quarta">Quarta-feira</option>
-                          <option value="quinta">Quinta-feira</option>
-                          <option value="sexta">Sexta-feira</option>
-                          <option value="sábado">Sábado</option>
-                          <option value="domingo">Domingo</option>
-                        </select>
-                      </div>
-
-                      <div className="flex flex-col gap-1">
-                        <label className="text-[10px] font-mono text-muted-foreground uppercase">Horário de Início (HH:MM):</label>
-                        <input
-                          type="time"
-                          name="progTime"
-                          required
-                          className="bg-zinc-910 p-2 rounded-xl border border-border focus:border-primary text-white outline-none font-mono"
-                        />
-                      </div>
-                    </div>
-
-                    <div className="flex flex-col gap-1">
-                      <label className="text-[10px] font-mono text-muted-foreground uppercase font-semibold">Link do Vídeo (Google Drive ou MP4 Direto):</label>
-                      <input
-                        type="url"
-                        name="progLink"
-                        required
-                        placeholder="https://drive.google.com/file/d/.../view"
-                        className="bg-zinc-910 p-2 rounded-xl border border-border focus:border-primary text-white outline-none font-mono"
-                      />
-                    </div>
-
-                    <div className="grid grid-cols-2 gap-3">
-                      <div className="flex flex-col gap-1">
-                        <label className="text-[10px] font-mono text-muted-foreground uppercase">Título do Vídeo/Programa:</label>
-                        <input
-                          type="text"
-                          name="progTitle"
-                          required
-                          placeholder="Masmorra de Fogo Ep. 01"
-                          className="bg-zinc-910 p-2 rounded-xl border border-border focus:border-primary text-white outline-none"
-                        />
-                      </div>
-
-                      <div className="flex flex-col gap-1">
-                        <label className="text-[10px] font-mono text-muted-foreground uppercase">Música Exibida na Tela:</label>
-                        <input
-                          type="text"
-                          name="progSong"
-                          placeholder="Volcano Bass Theme"
-                          className="bg-zinc-910 p-2 rounded-xl border border-border focus:border-primary text-white outline-none"
-                        />
-                      </div>
-                    </div>
-
-                    <div className="grid grid-cols-2 gap-3">
-                      <div className="flex flex-col gap-1">
-                        <label className="text-[10px] font-mono text-muted-foreground uppercase">Buff RPG Concedido:</label>
-                        <input
-                          type="text"
-                          name="progBuff"
-                          placeholder="+20 de Ataque de Fogo"
-                          className="bg-zinc-910 p-2 rounded-xl border border-border focus:border-primary text-white outline-none"
-                        />
-                      </div>
-
-                      <div className="flex flex-col gap-1">
-                        <label className="text-[10px] font-mono text-muted-foreground uppercase">Pequena Descrição:</label>
-                        <input
-                          type="text"
-                          name="progDesc"
-                          placeholder="Aquecimento na taverna de lava."
-                          className="bg-zinc-910 p-2 rounded-xl border border-border focus:border-primary text-white outline-none"
-                        />
-                      </div>
-                    </div>
-
-                    <button
-                      type="submit"
-                      className="w-full py-2.5 bg-primary hover:bg-primary-hover font-bold tracking-wide rounded-xl cursor-pointer shadow-lg shadow-primary/20 text-white transition-all text-xs"
-                    >
-                      ADICIONAR À PROGRAMAÇÃO 🎮
-                    </button>
-                  </form>
                 </div>
-
               </div>
 
-              {/* Direita: Lista / Grade de Transmissão Configurada Ativa */}
-              <div className="lg:col-span-7 flex flex-col gap-6">
-                
-                {/* Visualizador da Grade Ativa */}
-                <div className="bg-muted/40 border border-border p-5 rounded-2xl flex flex-col h-full">
-                  <div className="flex items-center justify-between border-b border-border pb-3 mb-4">
-                    <div className="flex items-center gap-2">
-                      <Calendar className="text-primary w-4 h-4" />
+              {/* Bloco de Integração com Telegram Web App */}
+              <div className="bg-muted/45 border border-[#1d1e3d] p-5 rounded-2xl flex flex-col justify-between">
+                <div>
+                  <div className="flex items-center justify-between mb-3">
+                    <div className="flex items-center gap-2.5">
+                      <Send className="text-[#229ED9] w-5 h-5" />
                       <h4 className="text-xs font-bold uppercase tracking-wider font-mono text-gray-200">
-                        Grade de Programação Programada ({isGoogleSheetsActive ? "Nuvem Planilha" : "Local do Navegador"})
+                        Hospedar como Telegram Web App (Mini App)
                       </h4>
                     </div>
                     
-                    <span className="text-[10px] bg-primary/10 border border-primary/20 p-1.5 rounded-lg text-primary font-mono font-bold animate-pulse">
-                      STATUS: TRANSMISSÃO AUTOMÁTICA
-                    </span>
-                  </div>
-
-                  {/* Tabela de Horários */}
-                  <div className="flex-1 overflow-x-auto min-h-[250px]">
-                    {isGoogleSheetsActive ? (
-                      <div className="h-full flex flex-col items-center justify-center p-6 text-center border-2 border-dashed border-border rounded-xl">
-                        <Database className="w-10 h-10 text-primary mb-3 animate-ping-slow" />
-                        <h5 className="text-sm font-bold text-white mb-1">Grade Integrada ao Google Cloud</h5>
-                        <p className="text-xs text-muted-foreground max-w-md">
-                          Sua programação está sendo controlada pela Planilha do Google online. Todas as datas, dias da semana e links cadastrados lá estão governando a rádio automaticamente a partir da nossa API em tempo real!
-                        </p>
-                        <a 
-                          href="https://script.google.com" 
-                          target="_blank" 
-                          rel="noreferrer" 
-                          className="mt-4 px-3.5 py-1.5 bg-zinc-800 border border-border hover:bg-zinc-750 text-white text-xs font-bold rounded-lg flex items-center gap-2 transition-all cursor-pointer"
-                        >
-                          <span>Abrir Editor do Apps Script</span>
-                          <ExternalLink className="w-3.5 h-3.5" />
-                        </a>
-                      </div>
-                    ) : (
-                      <table className="w-full text-left text-xs text-muted-foreground border-collapse">
-                        <thead>
-                          <tr className="border-b border-border/80 text-[10px] font-mono uppercase tracking-wider text-gray-400">
-                            <th className="pb-2.5">Dia</th>
-                            <th className="pb-2.5">Horário</th>
-                            <th className="pb-2.5">Título / Atração</th>
-                            <th className="pb-2.5">Efeito RPG Concedido</th>
-                            <th className="pb-2.5 text-right font-medium">Ações</th>
-                          </tr>
-                        </thead>
-                        <tbody>
-                          {localProgramList.length === 0 ? (
-                            <tr>
-                              <td colSpan={5} className="py-8 text-center text-muted-foreground">
-                                Nenhuma atração agendada. Adicione uma transmissão no formulário ao lado!
-                              </td>
-                            </tr>
-                          ) : (
-                            localProgramList.map((item, index) => (
-                              <tr key={index} className="border-b border-border/40 hover:bg-muted/10 transition-colors">
-                                <td className="py-3 font-mono font-bold text-white">{item.dia}</td>
-                                <td className="py-3 font-mono font-black text-primary">{item.horario}</td>
-                                <td className="py-3">
-                                  <div className="font-semibold text-white truncate max-w-[150px]" title={item.titulo}>{item.titulo}</div>
-                                  <div className="text-[10px] text-muted-foreground truncate max-w-[150px]" title={item.descricao}>{item.descricao}</div>
-                                </td>
-                                <td className="py-3">
-                                  <span className="px-2 py-0.5 bg-emerald-500/10 border border-emerald-500/20 text-emerald-400 rounded-lg text-[10px] font-mono">
-                                    {item.buff_rpg}
-                                  </span>
-                                </td>
-                                <td className="py-3 text-right">
-                                  <button
-                                    onClick={() => {
-                                      const filtered = localProgramList.filter((_, i) => i !== index);
-                                      setLocalProgramList(filtered);
-                                      setMessages(prev => [
-                                        ...prev,
-                                        {
-                                          id: Math.random().toString(),
-                                          sender: "Guia_Sonora_BOT",
-                                          role: "bard",
-                                          text: `🗑️ Atração de horário '${item.horario}' removida da grade de transmissão local.`,
-                                          timestamp: new Date().toLocaleTimeString("pt-BR", { hour: "2-digit", minute: "2-digit" }),
-                                          guild: "Agenda"
-                                        }
-                                      ]);
-                                      setTimeout(() => syncScheduledTransmission(false), 200);
-                                    }}
-                                    className="p-1.5 hover:bg-red-500/15 hover:text-red-500 rounded-lg transition-all text-muted-foreground cursor-pointer"
-                                    title="Excluir Horário"
-                                  >
-                                    <Trash className="w-4 h-4" />
-                                  </button>
-                                </td>
-                              </tr>
-                            ))
-                          )}
-                        </tbody>
-                      </table>
-                    )}
-                  </div>
-
-                  {/* Aba Informativa de Guia */}
-                  <div className="mt-4 p-4 bg-[#8b5cf6]/5 border border-[#8b5cf6]/20 rounded-2xl flex gap-3 text-left">
-                    <HelpCircle className="w-5 h-5 text-primary shrink-0 mt-0.5" />
-                    <div>
-                      <h5 className="text-xs font-bold text-white mb-1">Como hospedar os vídeos no Google Drive?</h5>
-                      <p className="text-[11px] text-muted-foreground leading-relaxed">
-                        1. Certifique-se de fazer o upload do vídeo em MP4 na sua conta do Google Drive.<br />
-                        2. Clique com o botão direito no vídeo, vá em <strong>Compartilhar &gt; Qualquer pessoa com o link pode abrir</strong> (como Leitor).<br />
-                        3. Copie o link gerado e cole na nossa ferramenta! Nós cuidaremos da conversão do link para streaming direto e cálculo do tempo sincronizado automaticamente para todos os seus ouvintes, sem que você de fato precise transmitir algo do seu computador!
-                      </p>
+                    {/* Tabs do Telegram */}
+                    <div className="flex bg-zinc-900 border border-border p-0.5 rounded-lg text-[10px]">
+                      <button
+                        onClick={() => setTelegramSelectedTab("passos")}
+                        className={`px-2 py-1 rounded font-mono font-bold cursor-pointer transition-all ${
+                          telegramSelectedTab === "passos" 
+                            ? "bg-[#229ED9] text-white" 
+                            : "text-zinc-400 hover:text-white"
+                        }`}
+                      >
+                        Passos
+                      </button>
+                      <button
+                        onClick={() => setTelegramSelectedTab("mock")}
+                        className={`px-2 py-1 rounded font-mono font-bold cursor-pointer transition-all ${
+                          telegramSelectedTab === "mock" 
+                            ? "bg-[#229ED9] text-white" 
+                            : "text-zinc-400 hover:text-white"
+                        }`}
+                      >
+                        Simulador
+                      </button>
                     </div>
                   </div>
 
+                  {telegramSelectedTab === "passos" ? (
+                    <div className="space-y-3.5 text-xs text-left">
+                      <p className="text-xs text-muted-foreground leading-relaxed">
+                        Qualquer pessoa pode sintonizar sua TV/Rádio do Empire diretamente **dentro do próprio aplicativo do Telegram**! Siga o tutorial abaixo para linkar este app ao seu bot:
+                      </p>
+
+                      <div className="space-y-2 border-l border-[#229ED9]/30 pl-3">
+                        <div className="relative">
+                          <span className="absolute -left-[19.5px] top-0.5 w-3 h-3 rounded-full bg-[#229ED9] border border-black" />
+                          <p className="font-bold text-white text-[11px]">1. Criar o Robô no BotFather</p>
+                          <p className="text-muted-foreground text-[10.5px]">Abra o Telegram, busque por <a href="https://t.me/BotFather" target="_blank" rel="noreferrer" className="text-[#229ED9] hover:underline">@BotFather</a> e envie <code className="bg-black/50 px-1 py-0.5 rounded text-amber-400 text-[10px]">/newbot</code> para criar seu robô.</p>
+                        </div>
+
+                        <div className="relative pt-1">
+                          <span className="absolute -left-[19.5px] top-1.5 w-3 h-3 rounded-full bg-[#229ED9] border border-black" />
+                          <p className="font-bold text-white text-[11px]">2. Criar mini-aplicativo</p>
+                          <p className="text-muted-foreground text-[10.5px]">Envie o comando <code className="bg-black/50 px-1 py-0.5 rounded text-amber-400 text-[10px]">/newapp</code> para associar um Mini App ao bot recém-criado.</p>
+                        </div>
+
+                        <div className="relative pt-1">
+                          <span className="absolute -left-[19.5px] top-1.5 w-3 h-3 rounded-full bg-[#229ED9] border border-black" />
+                          <p className="font-bold text-white text-[11px]">3. Linkar a URL do Web App</p>
+                          <p className="text-muted-foreground text-[10.5px]">Quando o BotFather pedir a **Web App URL**, use este link abaixo:</p>
+                          
+                          {/* Campo de link do projeto */}
+                          <div className="flex gap-2 mt-1.5">
+                            <input
+                              type="text"
+                              readOnly
+                              value={dynamicLocation || "https://carregando-link..."}
+                              className="flex-1 bg-zinc-900/95 text-[10.5px] rounded-lg px-2.5 py-1.5 border border-border text-[#229ED9] outline-none font-mono select-all"
+                            />
+                            <button
+                              onClick={() => {
+                                try {
+                                  navigator.clipboard.writeText(dynamicLocation);
+                                  setCopiedAppUrl(true);
+                                  setTimeout(() => setCopiedAppUrl(false), 2000);
+                                } catch(err) {
+                                  alert(dynamicLocation);
+                                }
+                              }}
+                              className="px-2.5 bg-zinc-800 hover:bg-zinc-700 text-white rounded-lg text-[10px] font-bold border border-border cursor-pointer transition-all shrink-0 active:scale-95"
+                            >
+                              {copiedAppUrl ? "Copiado!" : "Copiar"}
+                            </button>
+                          </div>
+                        </div>
+
+                        <div className="relative pt-1">
+                          <span className="absolute -left-[19.5px] top-1.5 w-3 h-3 rounded-full bg-[#229ED9] border border-black" />
+                          <p className="font-bold text-white text-[11px]">4. Definir Link Curto</p>
+                          <p className="text-muted-foreground text-[10.5px]">Crie o apelido de chamada (ex: <code className="text-amber-400 text-[10px]">aovivo</code>). Pronto! Você receberá o link para compartilhar no clã (<code className="text-[#229ED9] text-[10px] font-bold">t.me/SeuBot/aovivo</code>).</p>
+                        </div>
+                      </div>
+                    </div>
+                  ) : (
+                    /* Mockup de Telefone Simulando o Telegram Web App */
+                    <div className="flex flex-col items-center py-2">
+                      <div className="w-full max-w-[280px] bg-[#17212b] rounded-2xl border-4 border-slate-700 overflow-hidden shadow-2xl text-left font-sans">
+                        
+                        {/* Telegram Header */}
+                        <div className="bg-[#24303f] p-2.5 border-b border-zinc-900 flex items-center justify-between text-xs text-white">
+                          <div className="flex items-center gap-2">
+                            <div className="w-6 h-6 rounded-full bg-[#229ED9] flex items-center justify-center font-bold text-[10px] text-white">
+                              ETV
+                            </div>
+                            <div>
+                              <div className="font-bold text-[11px] leading-tight">Empire TV Bot</div>
+                              <div className="text-[9px] text-[#229ED9] leading-tight">bot</div>
+                            </div>
+                          </div>
+                          <div className="flex items-center gap-1.5 text-zinc-400 text-[11px]">
+                            <span>•••</span>
+                          </div>
+                        </div>
+
+                        {/* Telegram Chat Area */}
+                        <div className="p-3 space-y-3 min-h-[140px] bg-[#17212b] relative text-[10px] flex flex-col justify-between">
+                          {/* Mensagem do Bot */}
+                          <div className="p-2.5 bg-[#182533] border border-zinc-800 rounded-xl text-white max-w-[85%] space-y-1">
+                            <p className="font-bold text-[#4495e8] text-[9.5px]">⚔️ Aliança Empire TV</p>
+                            <p className="text-zinc-350 leading-relaxed text-[10px]">
+                              Saudações, Nobre Guerreiro! Clique no botão abaixo para sintonizar a transmissão do clã com buffs ativos de RPG ao vivo!
+                            </p>
+                          </div>
+
+                          {/* Botão de abrir Web App no chat */}
+                          <div className="flex justify-start">
+                            <button className="flex items-center gap-2 px-4 py-2 bg-[#4295e8] hover:bg-[#348ae6] text-white font-bold text-[10px] rounded-lg shadow-lg shadow-black/35 animate-bounce transition-all">
+                              <Tv className="w-3.5 h-3.5 animate-pulse" />
+                              <span>🎮 Assistir TV Empire</span>
+                            </button>
+                          </div>
+                        </div>
+
+                        {/* Footer simulado */}
+                        <div className="bg-[#24303f] p-2 border-t border-zinc-900 flex items-center justify-center text-[9px] text-zinc-400">
+                          Integração Oficial com Telegram Mini Apps
+                        </div>
+
+                      </div>
+                    </div>
+                  )}
                 </div>
 
+                <div className="mt-4 p-2.5 bg-sky-500/5 border border-sky-500/10 rounded-xl flex items-center gap-2.5 text-[11px]">
+                  <Send className="w-4 h-4 text-[#229ED9] shrink-0" />
+                  <span className="text-zinc-400 text-left">O player deste projeto é 100% responsivo e se encaixa perfeitamente na janela nativa do Telegram!</span>
+                </div>
               </div>
-              
+
+            </div>
+
+            {/* Informação sobre a realocação do Guia para a planilha */}
+            <div className="mt-5 border-t border-[#1d1e3d] pt-4 text-center">
+              <p className="text-[10.5px] text-zinc-400 font-mono">
+                💡 Toda a documentação e instruções das colunas agora foram integradas no seu Sheets (aba <code className="text-[#229ED9] font-bold">Manual_Empire_TV</code>) gerada pelo script!
+              </p>
             </div>
 
           </div>
+
         </section>
+      </div>
       )}
 
     </div>

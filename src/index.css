@@ -6,25 +6,25 @@
   --font-display: "Space Grotesk", sans-serif;
   --font-mono: "JetBrains Mono", monospace;
 
-  --color-background: #08070d; /* Immersive dark purple-neutral */
+  --color-background: #060713; /* Deep imperial navy-black similar to Empire Hub */
   --color-foreground: #f4f4f7;
-  --color-card: #111019;       /* Dark card */
+  --color-card: #0c0d21;       /* Sleek dark imperial card */
   --color-card-foreground: #f4f4f7;
-  --color-popover: #111019;
+  --color-popover: #0c0d21;
   --color-popover-foreground: #f4f4f7;
-  --color-primary: #ec4899;    /* Synthwave neon pink */
+  --color-primary: #8b5cf6;    /* Electric Purple/Violet accent */
   --color-primary-foreground: #ffffff;
-  --color-secondary: #8b5cf6;  /* Royal violet */
+  --color-secondary: #3b82f6;  /* Royal Cobalt Blue */
   --color-secondary-foreground: #ffffff;
-  --color-muted: #1a1926;
-  --color-muted-foreground: #9ca3af;
-  --color-accent: #f43f5e;     /* Pulse rose */
-  --color-accent-foreground: #ffffff;
+  --color-muted: #14152e;
+  --color-muted-foreground: #99a2c1;
+  --color-accent: #a78bfa;     /* Pastel Violet */
+  --color-accent-foreground: #111019;
   --color-destructive: #ef4444;
   --color-destructive-foreground: #ffffff;
-  --color-border: #232235;
-  --color-input: #232235;
-  --color-ring: #ec4899;
+  --color-border: #1d1e3d;     /* Deep navy border */
+  --color-input: #1d1e3d;
+  --color-ring: #8b5cf6;
 }
 
 @layer base {
