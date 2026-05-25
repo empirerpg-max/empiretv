@@ -41,12 +41,13 @@ import {
 // Mock de canais de streaming de código aberto (HLS)
 interface StreamChannel {
   id: string;
-  name: string;
+  name: string; // Representa o Tipo do material sintonizado
   url: string;
   fallbackUrl: string;
-  nowPlaying: string;
-  genre: string;
+  nowPlaying: string; // Representa o Material Tocando
+  genre: string; // Fallback para descrição/gênero
   buffBoost: string; // RPG status buff
+  program?: string; // Representa o Programa Ativo destacado
   durationSeconds?: number;
   seekOffset?: number;
 }
@@ -54,12 +55,13 @@ interface StreamChannel {
 const CHANNELS: StreamChannel[] = [
   {
     id: "principal",
-    name: "Transmissão Oficial Empire (Estúdio Principal)",
+    name: "Transmissão Geral",
     url: "https://test-streams.mux.dev/x36xhg/main.m3u8",
     fallbackUrl: "https://commondatastorage.googleapis.com/gtv-videos-bucket/sample/BigBuckBunny.mp4",
     nowPlaying: "Exibição Especial da Aliança Empire",
     genre: "Geral",
-    buffBoost: "XP Extra de Sintonia Ativo"
+    buffBoost: "XP Extra de Sintonia Ativo",
+    program: "Empire TV ao Vivo"
   }
 ];
 
@@ -340,18 +342,18 @@ export default function AoVivoRoute() {
         dia: "Todos",
         horario: "00:00",
         link_drive: "https://commondatastorage.googleapis.com/gtv-videos-bucket/sample/BigBuckBunny.mp4",
-        titulo: "Sinfonia da Alvorada Arcana",
-        descricao: "Música épica matinal para buff de stamina na guilda.",
-        musica_atual: "Orchestra of Dawn - Level 1",
+        programa: "Sinfonia da Alvorada Arcana",
+        tipo: "Clipe",
+        material_tocando: "Orchestra of Dawn - Level 1",
         buff_rpg: "+15 de Agilidade & +10% Regen de MP"
       },
       {
         dia: "Todos",
         horario: "12:00",
         link_drive: "https://commondatastorage.googleapis.com/gtv-videos-bucket/sample/TearsOfSteel.mp4",
-        titulo: "Heavy Beats Guerra de Clãs",
-        descricao: "Sintonia pesada para lutas PVP extremas.",
-        musica_atual: "Synth Remake of Steel - PVP Mode",
+        programa: "Guerra de Clãs",
+        tipo: "Heavy Beats",
+        material_tocando: "Synth Remake of Steel - PVP Mode",
         buff_rpg: "+20 de Foco & +5% Crítico"
       }
     ];
@@ -509,8 +511,16 @@ export default function AoVivoRoute() {
         .then(() => {
           setIsPlaying(true);
         })
-        .catch(() => {
-          setIsPlaying(false);
+        .catch((err) => {
+          console.warn("[Autoplay blocked] Tentando tocar mutado para evitar congelamento...", err);
+          video.muted = true;
+          setIsMuted(true);
+          video.play()
+            .then(() => setIsPlaying(true))
+            .catch((e2) => {
+              console.error("[Play Failed]", e2);
+              setIsPlaying(false);
+            });
         });
 
       return;
@@ -541,7 +551,12 @@ export default function AoVivoRoute() {
         video.play()
           .then(() => setIsPlaying(true))
           .catch(() => {
-            setIsPlaying(false);
+            console.warn("[Hls Autoplay blocked] Tentando mutar para tocar...");
+            video.muted = true;
+            setIsMuted(true);
+            video.play()
+              .then(() => setIsPlaying(true))
+              .catch(() => setIsPlaying(false));
           });
       });
 
@@ -585,7 +600,14 @@ export default function AoVivoRoute() {
 
         video.play()
           .then(() => setIsPlaying(true))
-          .catch(() => setIsPlaying(false));
+          .catch(() => {
+            console.warn("[Native Hls Autoplay blocked] Tentando mutar...");
+            video.muted = true;
+            setIsMuted(true);
+            video.play()
+              .then(() => setIsPlaying(true))
+              .catch(() => setIsPlaying(false));
+          });
       });
       video.onplay = () => setIsPlaying(true);
       video.onpause = () => setIsPlaying(false);
@@ -625,12 +647,13 @@ export default function AoVivoRoute() {
             // Sintonizar a transmissão retornada pela planilha com o offset calculado pelo Google Script
             setCurrentChannel({
               id: "sheets_active",
-              name: stream.title || "Canal Planilha",
+              name: stream.tipo || stream.title || "Canal Planilha",
               url: playerUrl,
               fallbackUrl: finalVideoUrl,
-              nowPlaying: stream.nowPlaying || "Música em Transmissão",
-              genre: stream.description || "Programação Ordenada",
+              nowPlaying: stream.materialTocando || stream.nowPlaying || "Música em Transmissão",
+              genre: stream.programa || stream.description || "Programação Ordenada",
               buffBoost: stream.buff || "Sem Buff Ativo",
+              program: stream.programa || "Canal Planilha",
               durationSeconds: parseInt(stream.durationSeconds || "600", 10),
               seekOffset: stream.seekOffset || 0
             });
@@ -645,7 +668,7 @@ export default function AoVivoRoute() {
                   id: Math.random().toString(),
                   sender: "Sistema_Sintonia",
                   role: "mod",
-                  text: `📡 Sintonizado na Planilha! Tocando agora: ${stream.title} (${stream.nowPlaying})`,
+                  text: `📡 Sintonizado na Planilha! Tocando agora: ${stream.programa || stream.title || "Programa"} (${stream.materialTocando || stream.nowPlaying || "Música"})`,
                   timestamp: new Date().toLocaleTimeString("pt-BR", { hour: "2-digit", minute: "2-digit" }),
                   guild: "Sintonia"
                 }
@@ -731,12 +754,13 @@ export default function AoVivoRoute() {
       // Sintoniza
       setCurrentChannel({
         id: `local_active_${activeVideo.index}`,
-        name: activeVideo.titulo || "Transmissão Sonora",
+        name: activeVideo.tipo || activeVideo.titulo || "Transmissão Sonora",
         url: playerUrl,
         fallbackUrl: directUrl,
-        nowPlaying: activeVideo.musica_atual || "Banda do Bardo",
-        genre: activeVideo.descricao || "Grade Local",
+        nowPlaying: activeVideo.material_tocando || activeVideo.musica_atual || "Banda do Bardo",
+        genre: activeVideo.programa || activeVideo.descricao || "Grade Local",
         buffBoost: activeVideo.buff_rpg || "+5% MP",
+        program: activeVideo.programa || "Grade Local",
         durationSeconds: activeVideo.durationSeconds,
         seekOffset: seekOffset
       });
@@ -751,7 +775,7 @@ export default function AoVivoRoute() {
             id: Math.random().toString(),
             sender: "Guia_Sonora_BOT",
             role: "bard",
-            text: `🎯 Sintonizado via Grade Local! Tocando: ${activeVideo.titulo} com ${Math.round(seekOffset / 60)}m de exibição decorrida em tempo real.`,
+            text: `🎯 Sintonizado via Grade Local! Tocando: ${activeVideo.programa || activeVideo.titulo || "Programa"} (${activeVideo.material_tocando || activeVideo.musica_atual || "Música"}) com ${Math.round(seekOffset / 60)}m de exibição decorrida em tempo real.`,
             timestamp: new Date().toLocaleTimeString("pt-BR", { hour: "2-digit", minute: "2-digit" }),
             guild: "Sintonia"
           }
@@ -848,26 +872,73 @@ export default function AoVivoRoute() {
     syncScheduledTransmission(false);
   }, [isGoogleSheetsActive]); // Re-sincroniza se o usuário trocar a chave/interruptor da planilha!
 
-  // Loop de monitoramento de horários: Verifica a cada 20 segundos se precisamos trocar o vídeo por conta de um novo programa agendado começar
+  // 1. Polling de Planilha (a cada 45 segundos) - Busca espontânea de alterações ou novos programas cadastrados
   useEffect(() => {
-    const timer = setInterval(() => {
-      // Re-calcula a transmissão atual e atualiza delicadamente se o programa do horário mudar
-      const now = new Date();
-      const currentHour = now.getHours();
-      const currentMinute = now.getMinutes();
-      const timeStr = `${String(currentHour).padStart(2, "0")}:${String(currentMinute).padStart(2, "0")}`;
-
-      // Se o horário atual bate perfeitamente com um horário de início da programação local ou externa (minuto zero), faz refresh!
-      const isStartOfProgram = localProgramList.some(item => item.horario === timeStr && now.getSeconds() < 25);
-      
-      if (isStartOfProgram) {
-        console.log(`[Agendador] Troca de programa agendado executando em ${timeStr}`);
+    const sheetsTimer = setInterval(() => {
+      if (isGoogleSheetsActive && scriptUrl && !isSyncing) {
+        console.log("[Auto-Sinc Planilha] Buscando atualizações de programação na planilha...");
         syncScheduledTransmission(false);
       }
-    }, 20000);
+    }, 45000);
 
-    return () => clearInterval(timer);
-  }, [localProgramList, syncScheduledTransmission]);
+    return () => clearInterval(sheetsTimer);
+  }, [isGoogleSheetsActive, scriptUrl, isSyncing, syncScheduledTransmission]);
+
+  // 2. Loop de Sincronia de Transmissão Contínua (a cada 4 segundos):
+  // Compara o relógio real com a programação e força a transição de vídeo / sincroniza desvios de tempo (VOD-to-Live)
+  useEffect(() => {
+    const liveTimer = setInterval(() => {
+      if (!fullSchedule || fullSchedule.length === 0) return;
+
+      const activeResult = findActiveVideoInTimeline(fullSchedule);
+      if (activeResult) {
+        const { activeVideo, seekOffset } = activeResult;
+
+        const originalUrl = activeVideo.link_drive || activeVideo.videoUrl || "";
+        const directUrl = convertDriveLinkToDirect(originalUrl);
+        const driveIframeUrl = getDriveIframeUrl(originalUrl);
+        const expectedUrl = driveIframeUrl && useDriveIframe ? originalUrl : directUrl;
+
+        // SE O VÍDEO SELECIONADO NA GRADE MUDOU (novo horário/programa começou)
+        if (currentChannel.url !== expectedUrl) {
+          console.log(`[Transmissão de TV] Transição automática de programa detectada. Trocando vídeo para: ${activeVideo.programa || activeVideo.titulo}`);
+          
+          setCurrentChannel({
+            id: activeVideo.id || `local_active_${activeVideo.index || Math.random()}`,
+            name: activeVideo.tipo || activeVideo.titulo || "Transmissão",
+            url: expectedUrl,
+            fallbackUrl: directUrl,
+            nowPlaying: activeVideo.material_tocando || activeVideo.musica_atual || "Música no Ar",
+            genre: activeVideo.programa || activeVideo.descricao || "Programação Ordenada",
+            buffBoost: activeVideo.buff_rpg || "Sem Buff",
+            program: activeVideo.programa || "Transmissão",
+            durationSeconds: activeVideo.durationSeconds || parseInt(activeVideo.duracao_segundos || "600", 10),
+            seekOffset: seekOffset
+          });
+
+          initPlayer(expectedUrl, false, seekOffset);
+        } else {
+          // SE É O MESMO VÍDEO: garante que o tempo real de reprodução não divirja do relógio do servidor (VOD-to-Live)
+          const video = videoRef.current;
+          if (video && isPlaying && !isLoading && !hasError) {
+            const currentVideoTime = video.currentTime;
+            
+            // Duração do vídeo para cálculo cíclico
+            const activeDuration = video.duration || activeVideo.durationSeconds || parseInt(activeVideo.duracao_segundos || "600", 10) || 600;
+            const targetTime = seekOffset % activeDuration;
+
+            // Se o desvio for de mais de 8 segundos (por buffering, pausar ou lag), reposiciona o vídeo suavemente de volta na hora certa!
+            if (Math.abs(currentVideoTime - targetTime) > 8) {
+              console.log(`[Sincronia TV] Corrigindo desvio de transmissão ao vivo de ${Math.round(currentVideoTime)}s para ${Math.round(targetTime)}s`);
+              video.currentTime = targetTime;
+            }
+          }
+        }
+      }
+    }, 4000);
+
+    return () => clearInterval(liveTimer);
+  }, [fullSchedule, currentChannel.url, isPlaying, isLoading, hasError, useDriveIframe, initPlayer]);
 
   // Controles manuais
   const togglePlay = () => {
@@ -875,7 +946,6 @@ export default function AoVivoRoute() {
     const isGoogleDriveLink = !!driveIframeUrl;
 
     if (isGoogleDriveLink && useDriveIframe) {
-      // Para o iframe do Drive, alternamos o estado de reprodução para guiar o timer do progresso de loot virtual
       setIsPlaying(!isPlaying);
       return;
     }
@@ -887,9 +957,32 @@ export default function AoVivoRoute() {
       video.pause();
       setIsPlaying(false);
     } else {
+      // Ao dar play, para funcionar como TV REAL, ajusta o player na hora certa antes de tocar!
+      // Se ele ficou pausado por minutos, ao reativar, pula instantaneamente para a cena correta atual!
+      if (fullSchedule && fullSchedule.length > 0) {
+        const activeResult = findActiveVideoInTimeline(fullSchedule);
+        if (activeResult) {
+          const { seekOffset } = activeResult;
+          const activeDuration = video.duration || currentChannel.durationSeconds || 600;
+          const targetTime = seekOffset % activeDuration;
+          
+          if (targetTime > 0) {
+            console.log(`[Controle Play] Sintonizando no ao vivo: Pulando para o ponto atual da TV (${Math.round(targetTime)}s)`);
+            video.currentTime = targetTime;
+          }
+        }
+      }
+
       video.play()
         .then(() => setIsPlaying(true))
-        .catch(err => console.log("Erro ao reproduzir: ", err));
+        .catch(err => {
+          console.warn("Erro ao reproduzir com áudio. Ativando auto-mute de segurança: ", err);
+          video.muted = true;
+          setIsMuted(true);
+          video.play()
+            .then(() => setIsPlaying(true))
+            .catch(e => console.error("Falha ao tocar mesmo com mute: ", e));
+        });
     }
   };
 
@@ -976,8 +1069,8 @@ export default function AoVivoRoute() {
                 <h1 className="text-lg font-black tracking-wider text-white">
                   EMPIRE TV
                 </h1>
-                <p className="text-[10px] font-mono text-primary font-bold uppercase tracking-widest truncate max-w-[200px]" title={currentChannel.name}>
-                  🟢 {currentChannel.name}
+                <p className="text-[10px] font-mono text-primary font-bold uppercase tracking-widest truncate max-w-[200px]" title={currentChannel.program || currentChannel.name}>
+                  🟢 {currentChannel.program || currentChannel.name}
                 </p>
               </div>
             </div>
@@ -1054,8 +1147,28 @@ export default function AoVivoRoute() {
       <main className={`flex-1 flex flex-col lg:flex-row ${isSmartTvMode ? "p-0" : "p-2 sm:p-4"} gap-4 overflow-hidden`}>
         
         {/* Lado Esquerdo: Player Principal e Informações */}
-        <div className={`flex-1 flex flex-col justify-center ${isSmartTvMode ? "h-screen w-screen p-0" : "gap-4"} h-full`}>
+        <div className={`flex-1 flex flex-col justify-center ${isSmartTvMode ? "h-screen w-screen p-0" : "gap-3 sm:gap-4"} h-full`}>
           
+          {/* Nome do programa exibido ACIMA do player do vídeo/música */}
+          {!isSmartTvMode && (
+            <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-2 px-1 py-1">
+              <div className="flex items-center gap-2">
+                <span className="flex h-2 w-2 relative">
+                  <span className="animate-ping absolute inline-flex h-full w-full rounded-full bg-primary opacity-75"></span>
+                  <span className="relative inline-flex rounded-full h-2 w-2 bg-primary"></span>
+                </span>
+                <span className="font-display text-sm sm:text-base font-bold text-zinc-350 tracking-wide uppercase">
+                  📺 TRANSMISSÃO ATIVA: <span className="text-primary font-black ml-1 uppercase">{currentChannel.program || currentChannel.genre || "Empire TV Oficial"}</span>
+                </span>
+              </div>
+              <div className="flex items-center gap-1.5 self-start sm:self-auto">
+                <span className="font-mono text-[9px] bg-emerald-500/10 border border-emerald-500/20 text-emerald-400 px-2 py-0.5 rounded font-extrabold uppercase animate-pulse">
+                  📡 SINAL ONLINE
+                </span>
+              </div>
+            </div>
+          )}
+
           {/* Container do Player com Proporção 16:9 Estrita usando aspect-video */}
           <div 
             id="musical-rpg-player"
@@ -1355,17 +1468,37 @@ export default function AoVivoRoute() {
           {/* Dados do Canal Abaixo do Player */}
           {!isSmartTvMode && (
             <div className="flex flex-col gap-4">
-              <div className="bg-card border border-border p-4 rounded-2xl flex flex-col md:flex-row items-start md:items-center justify-between gap-4">
-                <div>
+              <div className="bg-gradient-to-r from-card to-card/90 border border-border p-5 rounded-2xl flex flex-col md:flex-row items-center justify-between gap-4">
+                <div className="flex-1 w-full">
                   <div className="flex items-center gap-2 mb-1">
-                    <span className="w-2 h-2 rounded-full bg-primary animate-pulse" />
+                    <span className="w-1.5 h-1.5 rounded-full bg-primary animate-ping" />
                     <span className="font-mono text-xs text-primary font-bold tracking-wider uppercase">
-                      Programa Atual: {currentChannel.genre}
+                      📺 Programa Ativo:
                     </span>
                   </div>
-                  <h2 className="text-xl font-bold font-display tracking-tight text-white mb-1">
-                    {currentChannel.name}
+                  <h2 className="text-xl sm:text-2xl font-black font-display tracking-tight text-white mb-4 ml-3.5 leading-tight">
+                    {currentChannel.program || currentChannel.genre || "Transmissão Especial"}
                   </h2>
+                  
+                  <div className="grid grid-cols-1 sm:grid-cols-2 gap-3.5 pt-3.5 border-t border-border/40 ml-3.5">
+                    <div className="flex flex-col">
+                      <span className="text-[10px] font-mono text-zinc-400 uppercase tracking-widest">
+                        🔊 Material Tocando:
+                      </span>
+                      <span className="text-sm font-semibold text-emerald-400 font-sans mt-0.5">
+                        {currentChannel.nowPlaying || "Música em Transmissão"}
+                      </span>
+                    </div>
+
+                    <div className="flex flex-col">
+                      <span className="text-[10px] font-mono text-zinc-400 uppercase tracking-widest">
+                        🛡️ Tipo:
+                      </span>
+                      <span className="text-sm font-semibold text-zinc-100 font-sans mt-0.5">
+                        {currentChannel.name || "Geral"}
+                      </span>
+                    </div>
+                  </div>
                 </div>
               </div>
 

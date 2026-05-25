@@ -41,15 +41,15 @@ function doGet(e) {
         }
       });
       
-      // Fallbacks resilientes por ordem física de coluna caso o usuário mexcle ou erre os cabeçalhos
-      // Ordem padrão: 0: Dia, 1: Horario, 2: Link_Drive, 3: Duracao_Segundos, 4: Titulo, 5: Descricao, 6: Musica_Atual, 7: Buff_RPG
+      // Fallbacks resilientes por ordem física de coluna caso o usuário mescle ou erre os cabeçalhos
+      // Ordem padrão: 0: Dia, 1: Horario, 2: Link_Drive, 3: Duracao_Segundos, 4: Programa, 5: Tipo, 6: Material_Tocando, 7: Buff_RPG
       if (item["dia"] === undefined && row[0] !== undefined) item["dia"] = row[0];
       if (item["horario"] === undefined && row[1] !== undefined) item["horario"] = row[1];
       if (item["link_drive"] === undefined && row[2] !== undefined) item["link_drive"] = row[2];
       if (item["duracao_segundos"] === undefined && row[3] !== undefined) item["duracao_segundos"] = row[3];
-      if (item["titulo"] === undefined && row[4] !== undefined) item["titulo"] = row[4];
-      if (item["descricao"] === undefined && row[5] !== undefined) item["descricao"] = row[5];
-      if (item["musica_atual"] === undefined && row[6] !== undefined) item["musica_atual"] = row[6];
+      if (item["programa"] === undefined && row[4] !== undefined) item["programa"] = row[4];
+      if (item["tipo"] === undefined && row[5] !== undefined) item["tipo"] = row[5];
+      if (item["material_tocando"] === undefined && row[6] !== undefined) item["material_tocando"] = row[6];
       if (item["buff_rpg"] === undefined && row[7] !== undefined) item["buff_rpg"] = row[7];
 
       item.id = "prog_" + (index + 2); // Linha real correspondente na planilha
@@ -90,7 +90,7 @@ function buildActiveTimeline(schedule) {
   const dd = String(localTime.getDate()).padStart(2, "0");
   const mm = String(localTime.getMonth() + 1).padStart(2, "0");
   const yyyy = localTime.getFullYear();
-  const todayFormatted = dd + "/" + mm + "/" + yyyy; // "25/05/2026"
+  const todayFormatted = dd + "/" + mm + "/" + yyyy; 
 
   const currentDayOfWeek = localTime.getDay(); // 0-6
   const dayNames = ["domingo", "segunda", "terça", "quarta", "quinta", "sexta", "sábado"];
@@ -112,7 +112,7 @@ function buildActiveTimeline(schedule) {
 
     dayConfigStr = dayConfigStr.replace(/-/g, "/").toLowerCase();
     
-    // Suporta data específica (ex: 25/05/2026), "todos" ou os dias da semana normais como fallback
+    // Suporta data específica, "todos" ou os dias da semana normais como fallback
     return dayConfigStr === "todos" || 
            dayConfigStr === todayFormatted || 
            dayConfigStr === currentDayName || 
@@ -127,7 +127,7 @@ function buildActiveTimeline(schedule) {
     const minutes = parseInt(parts[1] || "0", 10);
     const configuredStartInSeconds = (hours * 3600) + (minutes * 60);
 
-    // Duração customizada (em segundos). Padrão do bardo: 600 segundos (10 minutos)
+    // Duração customizada (em segundos). Padrão do bardo: 600 segundos
     let duration = parseInt(item["duracao_segundos"] || "600", 10);
     if (isNaN(duration) || duration <= 0) {
       duration = 600; 
@@ -147,7 +147,7 @@ function buildActiveTimeline(schedule) {
   for (let i = 0; i < sortedItems.length; i++) {
     const current = sortedItems[i];
     
-    // Se o horário estipulado para esse vídeo for menor que o fim do vídeo anterior, 
+    // Se o horário estipulado for menor que o término do vídeo anterior,
     // ele entra na FILA IMEDIATAMENTE após o término do anterior (VOD encadeado)
     let actualStartInSeconds = current.configuredStartInSeconds;
     if (actualStartInSeconds < currentTimelineInSeconds) {
@@ -156,7 +156,7 @@ function buildActiveTimeline(schedule) {
 
     const actualEndInSeconds = actualStartInSeconds + current.durationSeconds;
     
-    // Atualiza o marcador do final da fila de transmissão
+    // Atualiza o final da fila de transmissão
     currentTimelineInSeconds = actualEndInSeconds;
 
     // Formatar horário real estimado de início para o bardo ler na planilha
@@ -178,9 +178,9 @@ function buildActiveTimeline(schedule) {
       endInSeconds: actualEndInSeconds,
       durationSeconds: current.durationSeconds,
       link_drive: current["link_drive"],
-      titulo: current["titulo"],
-      descricao: current["descricao"],
-      musica_atual: current["musica_atual"],
+      programa: current["programa"],
+      tipo: current["tipo"],
+      material_tocando: current["material_tocando"],
       buff_rpg: current["buff_rpg"]
     });
   }
@@ -195,9 +195,9 @@ function findActiveVideoInTimeline(timeline) {
   if (timeline.length === 0) {
     return {
       status: "rotation",
-      title: "Playlist Geral do Bardo",
-      description: "Música de fundo padrão (Nenhuma transmissão ativa)",
-      nowPlaying: "Theme Guild Acoustic - Lofi",
+      programa: "Playlist Geral do Bardo",
+      tipo: "Geral",
+      materialTocando: "Theme Guild Acoustic - Lofi",
       buff: "+10% de Regeneração de Mana",
       videoUrl: "https://commondatastorage.googleapis.com/gtv-videos-bucket/sample/BigBuckBunny.mp4",
       seekOffset: 0,
@@ -268,9 +268,9 @@ function buildResponsePayload(item, seekOffset) {
 
   return {
     status: "broadcasting",
-    title: item.titulo || "Transmissão da Divina Guilda",
-    description: item.descricao || "Grade de Programação Automática",
-    nowPlaying: item.musica_atual || "Música em Execução",
+    programa: item.programa || "Programa do Bardo",
+    tipo: item.tipo || "Geral",
+    materialTocando: item.material_tocando || "Música no Ar",
     buff: item.buff_rpg || "+15% Stamina",
     videoUrl: directUrl,
     startedAt: item.horarioCalculado,
@@ -322,9 +322,6 @@ function getProgramSheet() {
 }
 
 /**
- * Popula a planilha com colunas e dados de exemplo modernos para facilitar o entendimento do usuário
- */
-/**
  * Popula a planilha com colunas e dados de exemplo modernos para facilitar o entendimento do usuário.
  * Também cria de forma inovadora uma aba exclusiva de Documentação no Google Sheets.
  */
@@ -332,7 +329,7 @@ function initializeExampleData(sheet) {
   const ss = sheet.getParent();
   
   // 1. Criar e preencher a aba de programação principal
-  const headers = ["Dia", "Horario", "Link_Drive", "Duracao_Segundos", "Titulo", "Descricao", "Musica_Atual", "Buff_RPG"];
+  const headers = ["Dia", "Horario", "Link_Drive", "Duracao_Segundos", "Programa", "Tipo", "Material_Tocando", "Buff_RPG"];
   sheet.appendRow(headers);
   
   const now = new Date();
@@ -340,15 +337,15 @@ function initializeExampleData(sheet) {
   const dd = String(localTime.getDate()).padStart(2, "0");
   const mm = String(localTime.getMonth() + 1).padStart(2, "0");
   const yyyy = localTime.getFullYear();
-  const todayFormatted = dd + "/" + mm + "/" + yyyy; // "25/05/2026"
+  const todayFormatted = dd + "/" + mm + "/" + yyyy; 
   
   const sample1 = [
     todayFormatted, 
     "00:00", 
     "https://commondatastorage.googleapis.com/gtv-videos-bucket/sample/BigBuckBunny.mp4", 
     "600",
-    "Sinfonia da Alvorada Arcana (Fila Item 1)", 
-    "Primeiro vídeo da nossa Fila de Reprodução Automática do dia inteiro de missões.", 
+    "Sinfonia da Alvorada Arcana", 
+    "Clipe", 
     "Town Hall Acoustic Theme", 
     "+15 de Agilidade & +10% Regen de MP"
   ];
@@ -358,8 +355,8 @@ function initializeExampleData(sheet) {
     "00:00", // Notar: Têm o MESMO horário, então eles se enfileiram automaticamente!
     "https://commondatastorage.googleapis.com/gtv-videos-bucket/sample/TearsOfSteel.mp4", 
     "720",
-    "Estágio 2: Heavy Beats de Masmorra (Fila Item 2)", 
-    "Segundo vídeo da fila automática! Roda imediatamente depois do item 1 acabar.", 
+    "Guerra de Clãs", 
+    "Heavy Beats", 
     "Tears of Steel Synthwave Remix", 
     "+20 de Foco e +5% Chance Crítica"
   ];
@@ -388,9 +385,9 @@ function initializeExampleData(sheet) {
     docSheet.appendRow(["B) Horario", "Hora de início no formato de 24h HH:MM (ex: 14:00, 20:30, 00:00).", "Se cadastrar vários itens no mesmo horário, o sistema monta uma FILA sequencial empilhando as durações!"]);
     docSheet.appendRow(["C) Link_Drive", "Link de visualização compartilhado do Google Drive ('Qualquer pessoa com o link pode ver') ou URL direta de um vídeo MP4.", "O player resolve links do Google Drive nativamente convertendo em streaming em tempo real!"]);
     docSheet.appendRow(["D) Duracao_Segundos", "A duração exata do vídeo em segundos (ex: 600 para 10 minutos, 3600 para 1 hora).", "Importante colocar a duração correta para o alinhamento da fila e cálculo de sincronização perfeito."]);
-    docSheet.appendRow(["E) Titulo", "O título do programa que substitui o cabeçalho superior na tela durante a exibição.", "Fica destacado no player, informando aos membros a atração ativa."]);
-    docSheet.appendRow(["F) Descricao", "Pequeno resumo explicativo do conteúdo de transmissão ativo.", "Aparece com texto elegante e polido na barra de informações."]);
-    docSheet.appendRow(["G) Musica_Atual", "Texto informativo indicando a trilha de fundo, o som ou o bardo atual.", "Atualizado em tempo real na barra de player em execução."]);
+    docSheet.appendRow(["E) Programa", "Nome do Programa / Atração ativo na transmissão.", "Fica em destaque principal no player."]);
+    docSheet.appendRow(["F) Tipo", "O tipo do material que está sendo listado (ex: Clipe, Podcast, Gameplay, VOD).", "Fica exibido de forma estilizada ao lado do material."]);
+    docSheet.appendRow(["G) Material_Tocando", "O nome do material / música em execução no momento.", "Exibido logo abaixo do programa atual."]);
     docSheet.appendRow(["H) Buff_RPG", "O buff de RPG que os membros ganham ao assistir à transmissão (ex: '+15% EXP').", "Alimenta a imersão temática e dá bônus virtuais destacados em verde piscante no player!"]);
 
     docSheet.appendRow(["", "", ""]); // Linha vazia
