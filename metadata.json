@@ -1,0 +1,6 @@
+{
+  "name": "RPG Musical Ao Vivo",
+  "description": "Estação de transmissão ao vivo para jogadores de RPG musical, projetado para celulares, PCs e Smart TVs.",
+  "requestFramePermissions": [],
+  "majorCapabilities": ["MAJOR_CAPABILITY_SERVER_SIDE_GEMINI_API"]
+}
