@@ -162,7 +162,7 @@ def transmit_playlist(video_paths, rtmp_url, rtmp_key):
         log(f"  → {p}")
     dest = f"{rtmp_url.rstrip('/')}/{rtmp_key}"
     log(f"Destino RTMP: {rtmp_url.rstrip('/')}/<chave_oculta>")
-    cmd = [
+        cmd = [
         "ffmpeg", "-re",
         "-f", "concat", "-safe", "0",
         "-i", list_path,
@@ -181,6 +181,7 @@ def transmit_playlist(video_paths, rtmp_url, rtmp_key):
         "-b:a", "160k",
         "-ar", "44100",
         "-f", "flv",
+        "-rtmp_transport", "tcp",
         dest
     ]
     log("Iniciando FFmpeg...")
