@@ -7,4 +7,4 @@ binding = "VIDEOS_BUCKET"
 bucket_name = "empiretv-videos"
 
 [vars]
-SECRET_KEY = "coloque-uma-senha-forte-aqui"
+SECRET_KEY = "Matthewredouf@93"
