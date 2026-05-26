@@ -4,7 +4,7 @@ import fs from "fs";
 import { createServer as createViteServer } from "vite";
 
 // Configurações do ambiente de cache
-const CACHE_DIR = path.join("/tmp", "empiretv_videos");
+const CACHE_DIR = path.join(process.cwd(), "cache_videos");
 if (!fs.existsSync(CACHE_DIR)) {
   fs.mkdirSync(CACHE_DIR, { recursive: true });
 } else {
@@ -164,15 +164,18 @@ async function serveDirectDriveStreaming(driveId: string, req: express.Request, 
 
     const body = videoResponse.body;
     if (body) {
-      // @ts-ignore
-      const reader = body.getReader();
-      while (true) {
-        const { done, value } = await reader.read();
-        if (done) break;
-        res.write(Buffer.from(value));
-      }
+      const { Readable } = await import("stream");
+      const nodeStream = Readable.fromWeb(body as any);
+      
+      // Quando o navegador do usuário fecha a aba, dá pause ou busca o progresso (seek), aborta o pipe do Drive
+      req.on("close", () => {
+        try { nodeStream.destroy(); } catch (e) {}
+      });
+
+      nodeStream.pipe(res);
+    } else {
+      res.end();
     }
-    res.end();
   } catch (err) {
     console.error(`[Streaming Fallback Error] Falha de conexão de sinal do Drive para o ID ${driveId}:`, err);
     return serveBackupVideo(req, res);
@@ -185,34 +188,9 @@ async function serveDirectDriveStreaming(driveId: string, req: express.Request, 
 
 async function serveBackupVideo(req: express.Request, res: express.Response) {
   try {
-    const backupUrl = "https://commondatastorage.googleapis.com/gtv-videos-bucket/sample/BigBuckBunny.mp4";
-    const backupHeaders: Record<string, string> = { "User-Agent": "Mozilla/5.0" };
-    if (req.headers.range) {
-      backupHeaders["Range"] = req.headers.range;
-    }
-    const backupResponse = await fetch(backupUrl, { headers: backupHeaders });
-    
-    res.status(backupResponse.status);
-    res.setHeader("Accept-Ranges", "bytes");
-    res.setHeader("Cache-Control", "no-cache");
-    const ct = backupResponse.headers.get("Content-Type");
-    if (ct) res.setHeader("Content-Type", ct);
-    const cr = backupResponse.headers.get("Content-Range");
-    if (cr) res.setHeader("Content-Range", cr);
-    const cl = backupResponse.headers.get("Content-Length");
-    if (cl) res.setHeader("Content-Length", cl);
-
-    const body = backupResponse.body;
-    if (body) {
-      // @ts-ignore
-      const reader = body.getReader();
-      while (true) {
-        const { done, value } = await reader.read();
-        if (done) break;
-        res.write(Buffer.from(value));
-      }
-    }
-    res.end();
+    // Redirecionamento 302 direto e ultra-rápido para o vídeo estável de backup.
+    // Isso evita completamente o buffering proxy em nosso servidor do applet, dando suporte nativo a Range sem erros de formato HTML5!
+    return res.redirect("https://commondatastorage.googleapis.com/gtv-videos-bucket/sample/BigBuckBunny.mp4");
   } catch (err) {
     console.error("[Backup Streaming Error] Falha extrema ao servir o vídeo de contingência:", err);
     if (!res.headersSent) {
