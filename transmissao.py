@@ -276,12 +276,14 @@ def update_status(sheet, rows, status):
 # MAIN
 # ============================================================
 
-def main():
-    log("=== EMPIRE TV — INICIANDO TRANSMISSÃO ===")
-
     spreadsheet_id = os.environ.get("SPREADSHEET_ID")
     rtmp_url       = os.environ.get("RTMP_URL")
     rtmp_key       = os.environ.get("RTMP_KEY")
+
+    # DEBUG temporário — mostra o que chegou (sem expor a chave completa)
+    log(f"RTMP_URL recebida: '{rtmp_url}'")
+    log(f"RTMP_KEY recebida (primeiros 10 chars): '{str(rtmp_key)[:10]}...'")
+    log(f"SPREADSHEET_ID recebido (primeiros 10 chars): '{str(spreadsheet_id)[:10]}...'")
 
     if not all([spreadsheet_id, rtmp_url, rtmp_key]):
         log("ERRO: SPREADSHEET_ID, RTMP_URL ou RTMP_KEY ausentes!")
