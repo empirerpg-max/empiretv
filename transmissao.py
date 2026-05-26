@@ -217,21 +217,25 @@ def transmit_playlist(video_paths, rtmp_url, rtmp_key):
 
     dest = f"{rtmp_url.rstrip('/')}/{rtmp_key}"
 
-    cmd = [
+        cmd = [
         "ffmpeg",
         "-re",
         "-f", "concat",
         "-safe", "0",
         "-i", list_path,
-        "-c:v", "libx264",       # Re-encode para garantir compatibilidade de keyframes
-        "-preset", "veryfast",   # Rápido, baixo uso de CPU
+        "-c:v", "libx264",
+        "-preset", "veryfast",
         "-tune", "zerolatency",
-        "-b:v", "2500k",         # Bitrate de vídeo (ajuste conforme sua banda)
-        "-maxrate", "2500k",
-        "-bufsize", "5000k",
-        "-g", "60",              # Keyframe a cada 2s (60fps / 30fps = 2s)
+        "-b:v", "8000k",          # Bitrate recomendado pelo Kick
+        "-maxrate", "8000k",
+        "-bufsize", "16000k",
+        "-vf", "scale=1920:1080", # Resolução recomendada pelo Kick
+        "-r", "60",               # 60fps recomendado pelo Kick
+        "-g", "120",              # Keyframe a cada 2s com 60fps
+        "-keyint_min", "120",
+        "-sc_threshold", "0",
         "-c:a", "aac",
-        "-b:a", "128k",
+        "-b:a", "160k",
         "-ar", "44100",
         "-f", "flv",
         dest
