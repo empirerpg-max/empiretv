@@ -13,10 +13,6 @@ TZ_SP = pytz.timezone("America/Sao_Paulo")
 def log(msg):
     print(f"[{datetime.now(TZ_SP).strftime('%H:%M:%S')}] {msg}", flush=True)
 
-# ============================================================
-# AUTENTICAÇÃO GOOGLE
-# ============================================================
-
 def setup_gspread():
     log("Autenticando no Google Sheets...")
     creds_json = os.environ.get("GOOGLE_APPLICATION_CREDENTIALS_JSON")
@@ -33,69 +29,44 @@ def setup_gspread():
     log("Autenticado com sucesso!")
     return client
 
-# ============================================================
-# LEITURA DA PLANILHA
-# ============================================================
-
 def get_pending_videos(sheet):
+    import re
     raw_data = sheet.get_all_values()
     if not raw_data or len(raw_data) < 2:
         log("Planilha vazia.")
         return []
-
-    import re
     headers = [re.sub(r'^[A-Z]\s*[—-]\s*', '', h).strip() for h in raw_data[0]]
     records = [dict(zip(headers, row)) for row in raw_data[1:]]
-
     now = datetime.now(TZ_SP)
     videos = []
     grade_iniciada = False
-
     for idx, r in enumerate(records):
         status = str(r.get("Status", "")).strip().lower()
         if status in ("concluido", "concluído", "transmitindo", "falha"):
             continue
-
         drive_raw = str(r.get("Drive_ID") or r.get("Drive_Video_ID") or "").strip()
-        drive_id  = extract_drive_id(drive_raw)
-
+        drive_id = extract_drive_id(drive_raw)
         try:
             duracao = int(str(r.get("Duracao_Seg") or r.get("Duracao_Segundos") or "0").strip())
         except ValueError:
             duracao = 0
-
-        horario  = str(r.get("Horario", "")).strip()
+        horario = str(r.get("Horario", "")).strip()
         programa = str(r.get("Programa", "Empire TV")).strip()
-
         if not drive_id or duracao <= 0:
             log(f"Linha {idx+2} ignorada: Drive_ID ou Duracao_Seg ausente/inválido.")
             continue
-
         if horario:
             sched = parse_horario(horario, now)
             if sched and now >= sched:
                 grade_iniciada = True
-                videos.append({
-                    "row": idx + 2,
-                    "drive_id": drive_id,
-                    "programa": programa,
-                    "duracao": duracao,
-                    "horario": horario,
-                })
+                videos.append({"row": idx+2, "drive_id": drive_id, "programa": programa, "duracao": duracao, "horario": horario})
             elif sched and now < sched:
                 log(f"Linha {idx+2} ({programa}) agendada para {horario} — ainda não chegou.")
         else:
             if grade_iniciada:
-                videos.append({
-                    "row": idx + 2,
-                    "drive_id": drive_id,
-                    "programa": programa,
-                    "duracao": duracao,
-                    "horario": "(encadeado)",
-                })
+                videos.append({"row": idx+2, "drive_id": drive_id, "programa": programa, "duracao": duracao, "horario": "(encadeado)"})
             else:
                 log(f"Linha {idx+2} ({programa}) sem horário e grade não iniciou — ignorando.")
-
     return videos
 
 def parse_horario(horario_str, now):
@@ -123,10 +94,6 @@ def extract_drive_id(val):
         return val
     return ""
 
-# ============================================================
-# DOWNLOAD
-# ============================================================
-
 def download_video(drive_id, output_path):
     if os.path.exists(output_path):
         size = os.path.getsize(output_path)
@@ -134,10 +101,7 @@ def download_video(drive_id, output_path):
             log(f"Já em cache: {output_path} ({size/1024/1024:.1f} MB)")
             return True
         os.remove(output_path)
-
     log(f"Baixando ID: {drive_id} → {output_path}")
-
-    # Tentativa 1: gdown
     try:
         result = subprocess.run(
             ["gdown", "--id", drive_id, "-O", output_path, "--remaining-ok"],
@@ -149,8 +113,6 @@ def download_video(drive_id, output_path):
         log(f"gdown falhou: {result.stderr[:200]}")
     except Exception as e:
         log(f"gdown erro: {e}")
-
-    # Tentativa 2: curl com cookie
     try:
         subprocess.run(
             f"curl -sc /tmp/gdrive_cookie.txt 'https://drive.google.com/uc?export=download&id={drive_id}' -o /dev/null",
@@ -163,7 +125,6 @@ def download_video(drive_id, output_path):
                     if "download_warning" in line:
                         confirm = line.strip().split()[-1]
                         break
-
         url = f"https://drive.google.com/uc?export=download&confirm={confirm or 't'}&id={drive_id}"
         result = subprocess.run(
             ["curl", "-L", "-b", "/tmp/gdrive_cookie.txt", url, "-o", output_path],
@@ -174,50 +135,36 @@ def download_video(drive_id, output_path):
             return True
     except Exception as e:
         log(f"curl erro: {e}")
-
     log(f"FALHA no download do ID: {drive_id}")
     return False
 
 def download_all_parallel(videos):
     results = {}
     threads = []
-
     def worker(v):
         path = f"/tmp/video_{v['drive_id']}.mp4"
         results[v["drive_id"]] = (path, download_video(v["drive_id"], path))
-
     for v in videos:
         t = threading.Thread(target=worker, args=(v,))
         threads.append(t)
         t.start()
-
     for t in threads:
         t.join()
-
     return results
-
-# ============================================================
-# TRANSMISSÃO CONTÍNUA COM FFMPEG
-# ============================================================
 
 def transmit_playlist(video_paths, rtmp_url, rtmp_key):
     list_path = "/tmp/ffmpeg_playlist.txt"
     with open(list_path, "w") as f:
         for p in video_paths:
             f.write(f"file '{p}'\n")
-
     log(f"Transmitindo {len(video_paths)} vídeo(s) em sequência contínua...")
     for p in video_paths:
         log(f"  → {p}")
-
     dest = f"{rtmp_url.rstrip('/')}/{rtmp_key}"
     log(f"Destino RTMP: {rtmp_url.rstrip('/')}/<chave_oculta>")
-
     cmd = [
-        "ffmpeg",
-        "-re",
-        "-f", "concat",
-        "-safe", "0",
+        "ffmpeg", "-re",
+        "-f", "concat", "-safe", "0",
         "-i", list_path,
         "-c:v", "libx264",
         "-preset", "veryfast",
@@ -236,28 +183,21 @@ def transmit_playlist(video_paths, rtmp_url, rtmp_key):
         "-f", "flv",
         dest
     ]
-
     log("Iniciando FFmpeg...")
     process = subprocess.Popen(cmd, stdout=subprocess.PIPE, stderr=subprocess.STDOUT, text=True)
-
     for line in process.stdout:
         line = line.strip()
         if "frame=" in line or "time=" in line:
             print(f"\r{line}", end="", flush=True)
         elif line:
             print(line, flush=True)
-
     process.wait()
     print()
     return process.returncode == 0
 
-# ============================================================
-# ATUALIZAÇÃO DE STATUS NA PLANILHA
-# ============================================================
-
 def update_status(sheet, rows, status):
-    headers = sheet.row_values(1)
     import re
+    headers = sheet.row_values(1)
     headers_clean = [re.sub(r'^[A-Z]\s*[—-]\s*', '', h).strip() for h in headers]
     status_col = None
     for i, h in enumerate(headers_clean):
@@ -267,43 +207,37 @@ def update_status(sheet, rows, status):
     if not status_col:
         status_col = len(headers) + 1
         sheet.update_cell(1, status_col, "Status")
-
     for row_num in rows:
         sheet.update_cell(row_num, status_col, status)
     log(f"Status '{status}' atualizado para linhas: {rows}")
 
-# ============================================================
-# MAIN
-# ============================================================
-
+def main():
+    log("=== EMPIRE TV — INICIANDO TRANSMISSÃO ===")
     spreadsheet_id = os.environ.get("SPREADSHEET_ID")
     rtmp_url       = os.environ.get("RTMP_URL")
     rtmp_key       = os.environ.get("RTMP_KEY")
 
-    # DEBUG temporário — mostra o que chegou (sem expor a chave completa)
+    # DEBUG — confirma o que chegou nos secrets
     log(f"RTMP_URL recebida: '{rtmp_url}'")
-    log(f"RTMP_KEY recebida (primeiros 10 chars): '{str(rtmp_key)[:10]}...'")
-    log(f"SPREADSHEET_ID recebido (primeiros 10 chars): '{str(spreadsheet_id)[:10]}...'")
+    log(f"RTMP_KEY (primeiros 15 chars): '{str(rtmp_key)[:15]}...'")
+    log(f"SPREADSHEET_ID (primeiros 10 chars): '{str(spreadsheet_id)[:10]}...'")
 
     if not all([spreadsheet_id, rtmp_url, rtmp_key]):
         log("ERRO: SPREADSHEET_ID, RTMP_URL ou RTMP_KEY ausentes!")
         sys.exit(1)
 
     client = setup_gspread()
-
     try:
         spreadsheet = client.open_by_key(spreadsheet_id) if len(spreadsheet_id) > 40 else client.open(spreadsheet_id)
     except Exception as e:
         log(f"Erro ao abrir planilha: {e}")
         sys.exit(1)
-
     try:
         sheet = spreadsheet.worksheet("Programacao_RPG")
     except Exception:
         sheet = spreadsheet.get_worksheet(0)
 
     videos = get_pending_videos(sheet)
-
     if not videos:
         log("Nenhuma transmissão pendente para agora. Encerrando.")
         sys.exit(0)
