@@ -1,0 +1,10 @@
+name = "empiretv"
+main = "worker.js"
+compatibility_date = "2025-01-01"
+
+[[r2_buckets]]
+binding = "VIDEOS_BUCKET"
+bucket_name = "empiretv-videos"
+
+[vars]
+SECRET_KEY = "coloque-uma-senha-forte-aqui"
