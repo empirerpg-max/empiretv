@@ -12,7 +12,7 @@ if (!fs.existsSync(CACHE_DIR)) {
   try {
     const cachedFiles = fs.readdirSync(CACHE_DIR);
     for (const cachedFile of cachedFiles) {
-      if (cachedFile.endsWith(".mp4")) {
+      if (cachedFile.endsWith(".mp4") || cachedFile.endsWith(".tmp")) {
         fs.unlinkSync(path.join(CACHE_DIR, cachedFile));
       }
     }
@@ -242,7 +242,11 @@ function triggerBackgroundDownload(driveId: string, outputPath: string) {
       } else {
         console.error(`[Downloader Background] Falha ao sintonizar/salvar vídeo para o ID: ${driveId}`);
         if (fs.existsSync(outputPath)) {
-          fs.unlinkSync(outputPath);
+          try { fs.unlinkSync(outputPath); } catch (e) {}
+        }
+        const tempPath = outputPath + ".tmp";
+        if (fs.existsSync(tempPath)) {
+          try { fs.unlinkSync(tempPath); } catch (e) {}
         }
       }
     })
@@ -250,14 +254,17 @@ function triggerBackgroundDownload(driveId: string, outputPath: string) {
       activeDownloads.delete(driveId);
       console.error(`[Downloader Background] Erro fatal no pré-carregamento do ID ${driveId}:`, err);
       if (fs.existsSync(outputPath)) {
-        try {
-          fs.unlinkSync(outputPath);
-        } catch (e) {}
+        try { fs.unlinkSync(outputPath); } catch (e) {}
+      }
+      const tempPath = outputPath + ".tmp";
+      if (fs.existsSync(tempPath)) {
+        try { fs.unlinkSync(tempPath); } catch (e) {}
       }
     });
 }
 
 async function downloadFromGoogleDrive(driveId: string, outputPath: string): Promise<boolean> {
+  const tempPath = outputPath + ".tmp";
   try {
     const url = `https://drive.google.com/uc?export=download&id=${driveId}`;
     const response = await fetch(url, {
@@ -295,10 +302,11 @@ async function downloadFromGoogleDrive(driveId: string, outputPath: string): Pro
       return false;
     }
 
-    // Criar stream de escrita e salvar localmente em fatias
-    const fileStream = fs.createWriteStream(outputPath);
+    // Criar stream de escrita no arquivo temporário e salvar localmente em fatias
+    const fileStream = fs.createWriteStream(tempPath);
     const body = videoResponse.body;
     if (!body) {
+      try { fileStream.end(); fs.unlinkSync(tempPath); } catch (e) {}
       return false;
     }
 
@@ -312,14 +320,37 @@ async function downloadFromGoogleDrive(driveId: string, outputPath: string): Pro
     fileStream.end();
 
     return new Promise((resolve) => {
-      fileStream.on("finish", () => resolve(true));
+      fileStream.on("finish", () => {
+        try {
+          if (fs.existsSync(tempPath)) {
+            // Renomeia o arquivo temporário completo para o destino final .mp4
+            fs.renameSync(tempPath, outputPath);
+            resolve(true);
+          } else {
+            resolve(false);
+          }
+        } catch (renameErr) {
+          console.error(`[Rename Error] Falha ao renomear arquivo temporario de cache:`, renameErr);
+          resolve(false);
+        }
+      });
       fileStream.on("error", (err) => {
-        console.error(`[File Stream Error] Erro ao gravar o arquivo de cache:`, err);
+        console.error(`[File Stream Error] Erro ao gravar o arquivo de cache temporario:`, err);
+        try {
+          if (fs.existsSync(tempPath)) {
+            fs.unlinkSync(tempPath);
+          }
+        } catch (e) {}
         resolve(false);
       });
     });
   } catch (error) {
     console.error(`[Drive API Error] Exceção na chamada de pré-carga do Drive:`, error);
+    try {
+      if (fs.existsSync(tempPath)) {
+        fs.unlinkSync(tempPath);
+      }
+    } catch (e) {}
     return false;
   }
 }
