@@ -186,8 +186,6 @@ export default function AoVivo() {
       if (currentUrlRef.current !== c.videoUrl) {
         currentUrlRef.current = c.videoUrl;
         video.pause();
-        video.removeAttribute("src");
-        video.load();
 
         const onMetadataLoaded = () => {
           const seekTo = Math.max(c.seekOffset || 0, 0);
@@ -299,13 +297,22 @@ export default function AoVivo() {
             const video = videoRef.current;
             if (!video) return;
 
+            const mediaError = video.error;
+
+            // Ignora se for o erro de Aborto do HTML5 (código 1). Esse erro ocorre quando limpamos ou redefinimos a transmissão
+            if (mediaError && mediaError.code === 1) {
+              console.log("[Player] Ignorando evento de carregamento abortado (comportamento de transição natural de mídias).");
+              return;
+            }
+
             // Ignorar erros temporários se o player estiver limpando o src ou durante transição de mídias
             if (!video.src || video.src === "" || video.src === window.location.href) {
               console.log("[Player] Ignorando evento de erro temporário durante transição ou limpeza de fonte.");
               return;
             }
 
-            console.error(`Erro de carregamento capturado no player HTML5. Tentativa ${errorCountRef.current + 1}/3`);
+            const errorDetails = mediaError ? ` Código: ${mediaError.code} - Mensagem: ${mediaError.message || ""}` : "";
+            console.error(`Erro de carregamento capturado no player HTML5. Tentativa ${errorCountRef.current + 1}/3.${errorDetails}`);
             
             errorCountRef.current += 1;
             if (errorCountRef.current < 3) {

@@ -94,19 +94,35 @@ export default {
           const cookie = firstResp.headers.get("set-cookie") || "";
           const tokenMatch = cookie.match(/download_warning[^=]*=([^;]+)/);
           const confirm = (tokenMatch && tokenMatch[1]) ? tokenMatch[1] : "t";
+          
+          // Repassa o cabeçalho Range se solicitado pelo navegador cliente para streaming dinâmico
+          const driveHeaders = new Headers();
+          driveHeaders.set("User-Agent", "Mozilla/5.0");
+          driveHeaders.set("Cookie", cookie);
+          if (rangeHeader) {
+            driveHeaders.set("Range", rangeHeader);
+          }
+
           const videoResp = await fetch(
             `https://drive.google.com/uc?export=download&id=${driveId}&confirm=${confirm}`,
-            { headers: { "User-Agent": "Mozilla/5.0", "Cookie": cookie }, redirect: "follow" }
+            { headers: driveHeaders, redirect: "follow" }
           );
 
-          if (videoResp.ok) {
-            // Repassa o stream original do Drive com cabeçalhos CORS de vídeo
+          if (videoResp.ok || videoResp.status === 206) {
+            // Repassa o stream original do Drive com suporte elegante a Range e CORS de vídeo
             const headers = new Headers();
             headers.set("Access-Control-Allow-Origin", "*");
-            headers.set("Content-Type", "video/mp4");
-            // Se o Drive retornou Content-Length, nós repassamos
-            const contentLen = videoResp.headers.get("Content-Length");
-            if (contentLen) headers.set("Content-Length", contentLen);
+            headers.set("Accept-Ranges", "bytes");
+            headers.set("Cache-Control", "no-cache");
+            
+            const driveContentType = videoResp.headers.get("Content-Type");
+            headers.set("Content-Type", driveContentType || "video/mp4");
+            
+            const driveContentRange = videoResp.headers.get("Content-Range");
+            const driveContentLength = videoResp.headers.get("Content-Length");
+            
+            if (driveContentRange) headers.set("Content-Range", driveContentRange);
+            if (driveContentLength) headers.set("Content-Length", driveContentLength);
             
             return new Response(videoResp.body, {
               status: videoResp.status,
