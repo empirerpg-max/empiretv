@@ -52,9 +52,12 @@ function extractDriveId(val) {
   if (!val) return "";
   val = String(val).trim();
   
-  // Se for uma string de ID direto (sem barras ou pontos, geralmente com ~33 caracteres)
-  if (/^[a-zA-Z0-9_-]{25,45}$/.test(val)) {
-    return val;
+  // Se contiver palavras associadas a datas/calendários ou espaços, pula imediatamente para evitar falsos positivos
+  if (val.includes("GMT") || val.includes("Time") || val.includes("Standard") || val.includes(":") || val.includes(" ") || val.includes("/")) {
+    // Mas antes, se for uma URL, vamos extrair usando os regexes abaixo. Se não for URL, ignora.
+    if (!val.includes("http") && !val.includes("drive.google.com")) {
+      return "";
+    }
   }
   
   // Se for uma URL do Google Drive compartilhada
@@ -69,6 +72,12 @@ function extractDriveId(val) {
       return match[1];
     }
   }
+
+  // Se for uma string de ID direto (sem barras ou pontos, geralmente com ~33 caracteres)
+  if (/^[a-zA-Z0-9_-]{25,45}$/.test(val)) {
+    return val;
+  }
+  
   return "";
 }
 
