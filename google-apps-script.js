@@ -3,8 +3,11 @@
 // ============================================================
 
 const SPREADSHEET_ID = "";
-const PROXY_URL = "https://empiretv.empirerpg-forum.workers.dev";
-const WORKER_SECRET = "coloque-uma-senha-forte-aqui"; // mesma do wrangler.toml
+// Nota: O streaming foi migrado para rodar integrado e nativo no próprio servidor Express do Cloud Run.
+// O frontend do player de TV faz o redirecionamento automático das requisições de mídia para o servidor de cache local.
+// Você não precisa mais do Cloudflare Worker ou do Cloudflare R2! Todo o download e streaming ocorrem na sua hospedagem.
+const PROXY_URL = "https://seu-dominio-aqui.run.app"; 
+const WORKER_SECRET = "garupapa@123";
 
 // ============================================================
 // ENTRY POINT — API para o player
@@ -47,20 +50,16 @@ function doGet(e) {
 // AUXILIADORES DE EXTRAÇÃO INTELIGENTES E RESILIENTES
 // ============================================================
 
-// Extrai o ID de um arquivo do Google Drive a partir de qualquer string (IDs diretos ou links completos)
 function extractDriveId(val) {
   if (!val) return "";
   val = String(val).trim();
   
-  // Se contiver palavras associadas a datas/calendários ou espaços, pula imediatamente para evitar falsos positivos
   if (val.includes("GMT") || val.includes("Time") || val.includes("Standard") || val.includes(":") || val.includes(" ") || val.includes("/")) {
-    // Mas antes, se for uma URL, vamos extrair usando os regexes abaixo. Se não for URL, ignora.
     if (!val.includes("http") && !val.includes("drive.google.com")) {
       return "";
     }
   }
   
-  // Se for uma URL do Google Drive compartilhada
   const regexes = [
     /\/d\/([a-zA-Z0-9_-]{25,45})/i,
     /[?&]id=([a-zA-Z0-9_-]{25,45})/i,
@@ -73,7 +72,6 @@ function extractDriveId(val) {
     }
   }
 
-  // Se for uma string de ID direto (sem barras ou pontos, geralmente com ~33 caracteres)
   if (/^[a-zA-Z0-9_-]{25,45}$/.test(val)) {
     return val;
   }
@@ -81,7 +79,6 @@ function extractDriveId(val) {
   return "";
 }
 
-// Traduz o horário (em objeto Date ou String) de forma segura em segundos desde o início do dia
 function getSecondsFromValue(val) {
   if (val instanceof Date) {
     try {
@@ -96,7 +93,6 @@ function getSecondsFromValue(val) {
   const str = String(val || "").trim();
   if (!str) return null;
 
-  // Se contiver o formato ISO 1899-12-30T11:51:28.000Z
   if (str.includes("T")) {
     const tParts = str.split("T")[1];
     if (tParts) {
@@ -107,7 +103,6 @@ function getSecondsFromValue(val) {
     }
   }
 
-  // Tenta extrair qualquer padrão HH:MM:SS ou HH:MM
   const matches = str.match(/(\d{1,2}):(\d{2})(?::(\d{2}))?/);
   if (matches) {
     const hours = parseInt(matches[1], 10);
@@ -118,7 +113,6 @@ function getSecondsFromValue(val) {
   return null;
 }
 
-// Procura por ID do Drive analisando células do cabeçalho por apelidos ou mapeando qualquer coluna contidatária
 function findDriveIdInRow(row, headers) {
   const preferredAliases = ["drive video", "link drive", "link do drive", "video", "drive id", "url", "status"];
   for (var j = 0; j < preferredAliases.length; j++) {
@@ -132,7 +126,6 @@ function findDriveIdInRow(row, headers) {
       }
     }
   }
-  // Fallback geral: vasculha todas as colunas até encontrar um ID válido
   for (var i = 0; i < row.length; i++) {
     const val = String(row[i] || "").trim();
     const id = extractDriveId(val);
@@ -141,7 +134,6 @@ function findDriveIdInRow(row, headers) {
   return "";
 }
 
-// Procura e calcula o horário da transmissão
 function findHorarioSecondsInRow(row, headers) {
   const aliases = ["horario", "horário", "hora", "data", "schedule", "time"];
   for (var j = 0; j < aliases.length; j++) {
@@ -154,7 +146,6 @@ function findHorarioSecondsInRow(row, headers) {
       }
     }
   }
-  // Fallback: tenta analisar todas as colunas
   for (var i = 0; i < row.length; i++) {
     const val = row[i];
     const secs = getSecondsFromValue(val);
@@ -163,7 +154,6 @@ function findHorarioSecondsInRow(row, headers) {
   return null;
 }
 
-// Busca e valida a duração em segundos
 function findDurationSecondsInRow(row, headers) {
   const aliases = ["duracao segundos", "duracao", "duraçao", "duration", "tempo", "segundos"];
   for (var j = 0; j < aliases.length; j++) {
@@ -176,7 +166,6 @@ function findDurationSecondsInRow(row, headers) {
       }
     }
   }
-  // Vasculha qualquer número solto entre 10s e 86400s (24h)
   for (var i = 0; i < row.length; i++) {
     const val = row[i];
     if (val !== "" && !isNaN(val)) {
@@ -184,10 +173,9 @@ function findDurationSecondsInRow(row, headers) {
       if (num > 10 && num < 86400) return num;
     }
   }
-  return 600; // Tempo de backup padrão (10 minutos)
+  return 600;
 }
 
-// Busca dinamicamente os valores de metadados baseado em mapeamento de colunas
 function findMetadataInRow(row, headers, fieldType) {
   var aliases = [];
   var defaultVal = "";
@@ -228,7 +216,7 @@ function buildActiveTimeline(rows) {
 
   const sortedItems = dataRows.map((row, index) => {
     const driveVideoId = findDriveIdInRow(row, headers);
-    if (!driveVideoId) return null; // Ignora se não houver arquivo configurado
+    if (!driveVideoId) return null;
 
     const configuredStartInSeconds = findHorarioSecondsInRow(row, headers);
     if (configuredStartInSeconds === null || isNaN(configuredStartInSeconds)) return null;
@@ -278,6 +266,8 @@ function buildActiveTimeline(rows) {
 
     const videoIdClean = current.drive_video_id;
 
+    // Nota: Esta URL gerada de fallback é substituída de forma transparente por uma rota interna de alta velocidade (/video) pelo player do site,
+    // que faz o download do vídeo em segundo plano diretamente para o cache do servidor local, garantindo zero travamentos e buffering.
     const videoUrl = videoIdClean.startsWith("http")
       ? videoIdClean
       : `${PROXY_URL}/video?file=video_${videoIdClean}.mp4&secret=${WORKER_SECRET}`;
@@ -455,7 +445,7 @@ function limparProgramasVencidosSet(sheet) {
 }
 
 // ============================================================
-// PRÉ-CARGA — Baixa do Drive e salva no R2 automaticamente
+// COMPATIBILIDADE DE PRÉ-CARGA DE WORKERS (OPCIONAL/HISTÓRICO)
 // ============================================================
 
 function preCarregarProximosVideos() {
@@ -465,7 +455,7 @@ function preCarregarProximosVideos() {
 
   const headers = rows[0];
   const nowSec = getSecondsToday();
-  const limitePreCarga = nowSec + 3600; // janela de 1 hora à frente
+  const limitePreCarga = nowSec + 3600; 
   const statusColIdx = headers.findIndex(h => String(h).trim().toLowerCase() === "status") + 1;
   if (statusColIdx <= 0) return;
 
@@ -502,10 +492,6 @@ function preCarregarProximosVideos() {
   });
 }
 
-// ============================================================
-// PÓS-TRANSMISSÃO — Deleta do R2 após concluir
-// ============================================================
-
 function deletarVideosTransmitidos() {
   const sheet = getProgramSheet();
   const rows = sheet.getDataRange().getValues();
@@ -536,15 +522,13 @@ function deletarVideosTransmitidos() {
   });
 }
 
-// ============================================================
-// TRIGGERS — Rode configurarTriggers() UMA VEZ manualmente
-// ============================================================
-
 function configurarTriggers() {
   ScriptApp.getProjectTriggers().forEach(function(t) {
     ScriptApp.deleteTrigger(t);
   });
 
+  // O novo servidor do Cloud Run faz a pré-carga e cache em background de forma contínua a cada 45 segundos por conta própria.
+  // Você não precisa ativar triggers complexos se desejar, mas caso queira, estes são os triggers legados:
   ScriptApp.newTrigger("preCarregarProximosVideos")
     .timeBased().everyMinutes(30).create();
 

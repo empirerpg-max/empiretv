@@ -159,17 +159,11 @@ export default function AoVivo() {
         }
       }
 
-      const isUrlSuspicious = !c.videoUrl || c.videoUrl.includes("GMT") || c.videoUrl.includes("Standard") || c.videoUrl.includes("Time");
-      if (realId && (isUrlSuspicious || !c.videoUrl.includes(realId))) {
-        let secret = "garupapa@123";
-        if (c.videoUrl && c.videoUrl.includes("secret=")) {
-          const match = c.videoUrl.match(/[?&]secret=([^&]+)/);
-          if (match && match[1]) {
-            secret = match[1];
-          }
-        }
-        correctedUrl = `https://empiretv.empirerpg-forum.workers.dev/video?file=video_${realId}.mp4&secret=${secret}`;
-        console.warn(`[Autoreparo Frontend] Identificamos um desalinhamento na resposta da API na nuvem e corrigimos com sucesso a URL de: "${c.videoUrl}" para: "${correctedUrl}"`);
+      // Forçamos o redirecionamento de TODAS as transmissões para o nosso servidor Express local
+      // que faz o download do vídeo do Drive em background para cachear no disco local e evitar travamentos.
+      if (realId) {
+        correctedUrl = `/video?file=video_${realId}.mp4`;
+        console.log(`[Autoreparo Express] Redirecionando transmissão do Drive "${realId}" para o servidor local: "${correctedUrl}"`);
         c.videoUrl = correctedUrl;
       }
 
