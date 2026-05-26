@@ -41,19 +41,29 @@ export default function AoVivo() {
         video.pause();
         video.removeAttribute("src");
         video.load();
-        video.addEventListener(
-          "canplay",
-          () => {
-            video.currentTime = Math.max(c.seekOffset || 0, 0);
-            video.play().catch(() => {});
-          },
-          { once: true }
-        );
+
+        const onMetadataLoaded = () => {
+          const seekTo = Math.max(c.seekOffset || 0, 0);
+          video.currentTime = seekTo;
+          
+          video.play().catch((err) => {
+            console.warn("[Autoplay] Bloqueado pelo navegador devido a políticas de áudio. Tentando alternar para mutado para manter transmissão fluida...", err);
+            video.muted = true;
+            video.play().catch((errMuted) => {
+              console.error("[Autoplay] Falha persistente ao tentar tocar mesmo mutado:", errMuted);
+            });
+          });
+        };
+
+        video.addEventListener("loadedmetadata", onMetadataLoaded, { once: true });
         video.src = c.videoUrl;
         video.load();
       } else {
         const diff = Math.abs(video.currentTime - (c.seekOffset || 0));
-        if (diff > 5) video.currentTime = c.seekOffset || 0;
+        if (diff > 5) {
+          console.log(`[Sync] Resincronizando transmissão. Ajustando posição de ${video.currentTime.toFixed(1)}s para ${c.seekOffset}s`);
+          video.currentTime = c.seekOffset || 0;
+        }
       }
     } catch (e) {
       setErro("Erro ao conectar com a grade de programação.");

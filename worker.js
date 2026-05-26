@@ -12,8 +12,10 @@ export default {
         }
       });
     }
-    if (secret !== env.SECRET_KEY) {
-      return new Response("Não autorizado", { status: 401 });
+    if (path === "/preload" || path === "/delete") {
+      if (secret !== env.SECRET_KEY) {
+        return new Response("Não autorizado", { status: 401 });
+      }
     }
     if (path === "/preload") {
       const driveId = url.searchParams.get("id");
