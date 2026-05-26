@@ -1,6 +1,5 @@
 import os
 import sys
-import time
 import json
 import subprocess
 import threading
@@ -39,20 +38,18 @@ def setup_gspread():
 # ============================================================
 
 def get_pending_videos(sheet):
-    """
-    Retorna todos os vídeos Pendentes em ordem (Ordem crescente).
-    Vídeos sem horário são encadeados após o anterior.
-    Vídeos com horário só entram se o horário já chegou OU se fazem parte
-    da mesma grade (encadeados após um vídeo com horário que já chegou).
-    """
-    records = sheet.get_all_records()
-    if not records:
+    raw_data = sheet.get_all_values()
+    if not raw_data or len(raw_data) < 2:
         log("Planilha vazia.")
         return []
 
+    import re
+    headers = [re.sub(r'^[A-Z]\s*[—-]\s*', '', h).strip() for h in raw_data[0]]
+    records = [dict(zip(headers, row)) for row in raw_data[1:]]
+
     now = datetime.now(TZ_SP)
     videos = []
-    grade_iniciada = False  # True quando o primeiro vídeo com horário passado é encontrado
+    grade_iniciada = False
 
     for idx, r in enumerate(records):
         status = str(r.get("Status", "")).strip().lower()
@@ -61,16 +58,20 @@ def get_pending_videos(sheet):
 
         drive_raw = str(r.get("Drive_ID") or r.get("Drive_Video_ID") or "").strip()
         drive_id  = extract_drive_id(drive_raw)
-        duracao   = int(r.get("Duracao_Seg") or r.get("Duracao_Segundos") or 0)
-        horario   = str(r.get("Horario", "")).strip()
-        programa  = str(r.get("Programa", "Empire TV")).strip()
+
+        try:
+            duracao = int(str(r.get("Duracao_Seg") or r.get("Duracao_Segundos") or "0").strip())
+        except ValueError:
+            duracao = 0
+
+        horario  = str(r.get("Horario", "")).strip()
+        programa = str(r.get("Programa", "Empire TV")).strip()
 
         if not drive_id or duracao <= 0:
             log(f"Linha {idx+2} ignorada: Drive_ID ou Duracao_Seg ausente/inválido.")
             continue
 
         if horario:
-            # Vídeo com horário fixo — só entra se o horário já chegou
             sched = parse_horario(horario, now)
             if sched and now >= sched:
                 grade_iniciada = True
@@ -82,9 +83,8 @@ def get_pending_videos(sheet):
                     "horario": horario,
                 })
             elif sched and now < sched:
-                log(f"Linha {idx+2} ({programa}) agendada para {horario} — ainda não chegou, ignorando.")
+                log(f"Linha {idx+2} ({programa}) agendada para {horario} — ainda não chegou.")
         else:
-            # Vídeo sem horário — encadeia se a grade já iniciou
             if grade_iniciada:
                 videos.append({
                     "row": idx + 2,
@@ -94,7 +94,7 @@ def get_pending_videos(sheet):
                     "horario": "(encadeado)",
                 })
             else:
-                log(f"Linha {idx+2} ({programa}) sem horário e grade ainda não iniciou — ignorando.")
+                log(f"Linha {idx+2} ({programa}) sem horário e grade não iniciou — ignorando.")
 
     return videos
 
@@ -179,7 +179,6 @@ def download_video(drive_id, output_path):
     return False
 
 def download_all_parallel(videos):
-    """Baixa todos os vídeos em paralelo para economizar tempo"""
     results = {}
     threads = []
 
@@ -202,22 +201,19 @@ def download_all_parallel(videos):
 # ============================================================
 
 def transmit_playlist(video_paths, rtmp_url, rtmp_key):
-    """
-    Transmite todos os vídeos em sequência contínua como uma única live.
-    Usa concat do FFmpeg — sem cortes entre vídeos.
-    """
-    # Cria arquivo de lista para o FFmpeg
     list_path = "/tmp/ffmpeg_playlist.txt"
     with open(list_path, "w") as f:
         for p in video_paths:
             f.write(f"file '{p}'\n")
 
     log(f"Transmitindo {len(video_paths)} vídeo(s) em sequência contínua...")
-    log(f"Playlist:\n" + "\n".join(f"  → {p}" for p in video_paths))
+    for p in video_paths:
+        log(f"  → {p}")
 
     dest = f"{rtmp_url.rstrip('/')}/{rtmp_key}"
+    log(f"Destino RTMP: {rtmp_url.rstrip('/')}/<chave_oculta>")
 
-        cmd = [
+    cmd = [
         "ffmpeg",
         "-re",
         "-f", "concat",
@@ -226,12 +222,12 @@ def transmit_playlist(video_paths, rtmp_url, rtmp_key):
         "-c:v", "libx264",
         "-preset", "veryfast",
         "-tune", "zerolatency",
-        "-b:v", "8000k",          # Bitrate recomendado pelo Kick
+        "-b:v", "8000k",
         "-maxrate", "8000k",
         "-bufsize", "16000k",
-        "-vf", "scale=1920:1080", # Resolução recomendada pelo Kick
-        "-r", "60",               # 60fps recomendado pelo Kick
-        "-g", "120",              # Keyframe a cada 2s com 60fps
+        "-vf", "scale=1920:1080",
+        "-r", "60",
+        "-g", "120",
         "-keyint_min", "120",
         "-sc_threshold", "0",
         "-c:a", "aac",
@@ -252,7 +248,7 @@ def transmit_playlist(video_paths, rtmp_url, rtmp_key):
             print(line, flush=True)
 
     process.wait()
-    print()  # quebra de linha após o \r do progresso
+    print()
     return process.returncode == 0
 
 # ============================================================
@@ -261,8 +257,10 @@ def transmit_playlist(video_paths, rtmp_url, rtmp_key):
 
 def update_status(sheet, rows, status):
     headers = sheet.row_values(1)
+    import re
+    headers_clean = [re.sub(r'^[A-Z]\s*[—-]\s*', '', h).strip() for h in headers]
     status_col = None
-    for i, h in enumerate(headers):
+    for i, h in enumerate(headers_clean):
         if h.strip().lower() == "status":
             status_col = i + 1
             break
@@ -302,7 +300,6 @@ def main():
     except Exception:
         sheet = spreadsheet.get_worksheet(0)
 
-    # 1. Busca vídeos pendentes na ordem correta
     videos = get_pending_videos(sheet)
 
     if not videos:
@@ -313,14 +310,11 @@ def main():
     for v in videos:
         log(f"  [{v['horario']}] {v['programa']} — ID: {v['drive_id']} ({v['duracao']}s)")
 
-    # 2. Marca todos como "Transmitindo" imediatamente (evita job duplicado)
     update_status(sheet, [v["row"] for v in videos], "Transmitindo")
 
-    # 3. Baixa todos em paralelo
     log("Iniciando downloads paralelos...")
     download_results = download_all_parallel(videos)
 
-    # Filtra só os que baixaram com sucesso, mantendo a ordem original
     video_paths = []
     failed_rows = []
     for v in videos:
@@ -331,7 +325,6 @@ def main():
             log(f"FALHA no download: {v['programa']} (ID: {v['drive_id']})")
             failed_rows.append(v["row"])
 
-    # Marca os que falharam como Pendente novamente
     if failed_rows:
         update_status(sheet, failed_rows, "Pendente")
 
@@ -340,10 +333,8 @@ def main():
         update_status(sheet, [v["row"] for v in videos], "Falha")
         sys.exit(1)
 
-    # 4. Transmite tudo em sequência contínua
     success = transmit_playlist(video_paths, rtmp_url, rtmp_key)
 
-    # 5. Limpa arquivos locais
     for path in video_paths:
         try:
             if os.path.exists(path):
@@ -351,7 +342,6 @@ def main():
         except Exception:
             pass
 
-    # 6. Atualiza status final
     transmitted_rows = [
         v["row"] for v in videos
         if download_results.get(v["drive_id"], (None, False))[1]
