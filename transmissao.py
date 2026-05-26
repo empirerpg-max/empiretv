@@ -42,7 +42,7 @@ def get_pending_videos(sheet):
     grade_iniciada = False
     for idx, r in enumerate(records):
         status = str(r.get("Status", "")).strip().lower()
-        if status in ("concluido", "concluído", "transmitindo", "falha"):
+        if status in ("finalizado", "transmitindo", "falha"):
             continue
         drive_raw = str(r.get("Drive_ID") or r.get("Drive_Video_ID") or "").strip()
         drive_id = extract_drive_id(drive_raw)
@@ -50,18 +50,21 @@ def get_pending_videos(sheet):
             duracao = int(str(r.get("Duracao_Seg") or r.get("Duracao_Segundos") or "0").strip())
         except ValueError:
             duracao = 0
-        horario = str(r.get("Horario", "")).strip()
-        programa = str(r.get("Programa", "Empire TV")).strip()
+        data_str   = str(r.get("Data", "")).strip()
+        horario    = str(r.get("Horario", "")).strip()
+        programa   = str(r.get("Programa", "Empire TV")).strip()
         if not drive_id or duracao <= 0:
             log(f"Linha {idx+2} ignorada: Drive_ID ou Duracao_Seg ausente/inválido.")
             continue
         if horario:
-            sched = parse_horario(horario, now)
+            sched = parse_datetime(data_str, horario, now)
             if sched and now >= sched:
                 grade_iniciada = True
-                videos.append({"row": idx+2, "drive_id": drive_id, "programa": programa, "duracao": duracao, "horario": horario})
+                videos.append({"row": idx+2, "drive_id": drive_id, "programa": programa, "duracao": duracao, "horario": f"{data_str} {horario}".strip()})
             elif sched and now < sched:
-                log(f"Linha {idx+2} ({programa}) agendada para {horario} — ainda não chegou.")
+                log(f"Linha {idx+2} ({programa}) agendada para {data_str} {horario} — ainda não chegou.")
+            else:
+                log(f"Linha {idx+2} ({programa}) com data/hora inválida: '{data_str} {horario}' — ignorando.")
         else:
             if grade_iniciada:
                 videos.append({"row": idx+2, "drive_id": drive_id, "programa": programa, "duracao": duracao, "horario": "(encadeado)"})
@@ -69,11 +72,24 @@ def get_pending_videos(sheet):
                 log(f"Linha {idx+2} ({programa}) sem horário e grade não iniciou — ignorando.")
     return videos
 
-def parse_horario(horario_str, now):
-    fmts = ["%Y-%m-%d %H:%M", "%d/%m/%Y %H:%M", "%H:%M:%S", "%H:%M"]
+def parse_datetime(data_str, horario_str, now):
+    """
+    Tenta combinar Data + Horario em um datetime com fuso.
+    Se Data estiver vazia, assume a data de hoje.
+    Formatos suportados: DD/MM/AAAA + HH:MM ou só HH:MM
+    """
+    combined = f"{data_str} {horario_str}".strip() if data_str else horario_str.strip()
+    fmts = [
+        "%d/%m/%Y %H:%M",
+        "%d/%m/%Y %H:%M:%S",
+        "%Y-%m-%d %H:%M",
+        "%Y-%m-%d %H:%M:%S",
+        "%H:%M:%S",
+        "%H:%M",
+    ]
     for fmt in fmts:
         try:
-            dt = datetime.strptime(horario_str, fmt)
+            dt = datetime.strptime(combined, fmt)
             if fmt in ("%H:%M", "%H:%M:%S"):
                 dt = now.replace(hour=dt.hour, minute=dt.minute, second=0, microsecond=0)
             if dt.tzinfo is None:
@@ -177,7 +193,6 @@ def transmit_playlist(video_paths, rtmp_url, rtmp_key):
         "-b:v", "8000k",
         "-maxrate", "8000k",
         "-bufsize", "16000k",
-        # Mantém proporção original e preenche bordas com preto até 1920x1080
         "-vf", "scale=1920:1080:force_original_aspect_ratio=decrease,pad=1920:1080:(ow-iw)/2:(oh-ih)/2:black",
         "-r", "60",
         "-g", "120",
@@ -275,7 +290,7 @@ def main():
         if download_results.get(v["drive_id"], (None, False))[1]
     ]
     if success:
-        update_status(sheet, transmitted_rows, "Concluido")
+        update_status(sheet, transmitted_rows, "Finalizado")
         log("=== TRANSMISSÃO CONCLUÍDA COM SUCESSO ===")
     else:
         update_status(sheet, transmitted_rows, "Falha")
