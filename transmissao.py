@@ -162,7 +162,7 @@ def transmit_playlist(video_paths, rtmp_url, rtmp_key):
         log(f"  → {p}")
     dest = f"{rtmp_url.rstrip('/')}/{rtmp_key}"
     log(f"Destino RTMP: {rtmp_url.rstrip('/')}/<chave_oculta>")
-        cmd = [
+    cmd = [
         "ffmpeg", "-re",
         "-f", "concat", "-safe", "0",
         "-i", list_path,
@@ -180,8 +180,8 @@ def transmit_playlist(video_paths, rtmp_url, rtmp_key):
         "-c:a", "aac",
         "-b:a", "160k",
         "-ar", "44100",
-        "-f", "flv",
         "-rtmp_transport", "tcp",
+        "-f", "flv",
         dest
     ]
     log("Iniciando FFmpeg...")
@@ -215,18 +215,14 @@ def update_status(sheet, rows, status):
 def main():
     log("=== EMPIRE TV — INICIANDO TRANSMISSÃO ===")
     spreadsheet_id = os.environ.get("SPREADSHEET_ID")
-    rtmp_url       = os.environ.get("RTMP_URL")
-    rtmp_key       = os.environ.get("RTMP_KEY")
-
-    # DEBUG — confirma o que chegou nos secrets
+    rtmp_url = os.environ.get("RTMP_URL")
+    rtmp_key = os.environ.get("RTMP_KEY")
     log(f"RTMP_URL recebida: '{rtmp_url}'")
     log(f"RTMP_KEY (primeiros 15 chars): '{str(rtmp_key)[:15]}...'")
     log(f"SPREADSHEET_ID (primeiros 10 chars): '{str(spreadsheet_id)[:10]}...'")
-
     if not all([spreadsheet_id, rtmp_url, rtmp_key]):
         log("ERRO: SPREADSHEET_ID, RTMP_URL ou RTMP_KEY ausentes!")
         sys.exit(1)
-
     client = setup_gspread()
     try:
         spreadsheet = client.open_by_key(spreadsheet_id) if len(spreadsheet_id) > 40 else client.open(spreadsheet_id)
@@ -237,21 +233,16 @@ def main():
         sheet = spreadsheet.worksheet("Programacao_RPG")
     except Exception:
         sheet = spreadsheet.get_worksheet(0)
-
     videos = get_pending_videos(sheet)
     if not videos:
         log("Nenhuma transmissão pendente para agora. Encerrando.")
         sys.exit(0)
-
     log(f"{len(videos)} vídeo(s) encontrado(s) para transmissão:")
     for v in videos:
         log(f"  [{v['horario']}] {v['programa']} — ID: {v['drive_id']} ({v['duracao']}s)")
-
     update_status(sheet, [v["row"] for v in videos], "Transmitindo")
-
     log("Iniciando downloads paralelos...")
     download_results = download_all_parallel(videos)
-
     video_paths = []
     failed_rows = []
     for v in videos:
@@ -261,29 +252,23 @@ def main():
         else:
             log(f"FALHA no download: {v['programa']} (ID: {v['drive_id']})")
             failed_rows.append(v["row"])
-
     if failed_rows:
         update_status(sheet, failed_rows, "Pendente")
-
     if not video_paths:
         log("Nenhum vídeo disponível para transmitir. Abortando.")
         update_status(sheet, [v["row"] for v in videos], "Falha")
         sys.exit(1)
-
     success = transmit_playlist(video_paths, rtmp_url, rtmp_key)
-
     for path in video_paths:
         try:
             if os.path.exists(path):
                 os.remove(path)
         except Exception:
             pass
-
     transmitted_rows = [
         v["row"] for v in videos
         if download_results.get(v["drive_id"], (None, False))[1]
     ]
-
     if success:
         update_status(sheet, transmitted_rows, "Concluido")
         log("=== TRANSMISSÃO CONCLUÍDA COM SUCESSO ===")
