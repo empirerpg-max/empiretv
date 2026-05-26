@@ -160,17 +160,13 @@ def transmit_playlist(video_paths, rtmp_url, rtmp_key):
     log(f"Transmitindo {len(video_paths)} vídeo(s) em sequência contínua...")
     for p in video_paths:
         log(f"  → {p}")
-
-    # Converte rtmps:// para o formato aceito pelo FFmpeg com TLS nativo
     raw_url = rtmp_url.rstrip("/")
     if raw_url.startswith("rtmps://"):
         host_path = raw_url.replace("rtmps://", "")
         dest = f"rtmps://{host_path}/app/{rtmp_key}"
     else:
         dest = f"{raw_url}/app/{rtmp_key}"
-
     log(f"Destino RTMP: {raw_url}/app/<chave_oculta>")
-
     cmd = [
         "ffmpeg", "-re",
         "-f", "concat", "-safe", "0",
@@ -181,7 +177,8 @@ def transmit_playlist(video_paths, rtmp_url, rtmp_key):
         "-b:v", "8000k",
         "-maxrate", "8000k",
         "-bufsize", "16000k",
-        "-vf", "scale=1920:1080",
+        # Mantém proporção original e preenche bordas com preto até 1920x1080
+        "-vf", "scale=1920:1080:force_original_aspect_ratio=decrease,pad=1920:1080:(ow-iw)/2:(oh-ih)/2:black",
         "-r", "60",
         "-g", "120",
         "-keyint_min", "120",
@@ -192,7 +189,6 @@ def transmit_playlist(video_paths, rtmp_url, rtmp_key):
         "-f", "flv",
         dest
     ]
-
     log("Iniciando FFmpeg...")
     process = subprocess.Popen(cmd, stdout=subprocess.PIPE, stderr=subprocess.STDOUT, text=True)
     for line in process.stdout:
