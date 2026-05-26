@@ -214,13 +214,11 @@ function buildActiveTimeline(rows) {
   const headers = rows[0];
   const dataRows = rows.slice(1);
 
-  const sortedItems = dataRows.map((row, index) => {
+  const parsedItems = dataRows.map((row, index) => {
     const driveVideoId = findDriveIdInRow(row, headers);
     if (!driveVideoId) return null;
 
     const configuredStartInSeconds = findHorarioSecondsInRow(row, headers);
-    if (configuredStartInSeconds === null || isNaN(configuredStartInSeconds)) return null;
-
     const durationSeconds = findDurationSecondsInRow(row, headers);
 
     const programa = findMetadataInRow(row, headers, "programa");
@@ -232,67 +230,80 @@ function buildActiveTimeline(rows) {
       id: "prog_" + (index + 2),
       rowNum: index + 2,
       drive_video_id: driveVideoId,
-      configuredStartInSeconds,
-      durationSeconds,
-      programa,
-      tipo,
-      material_tocando,
-      buff_rpg
+      configuredStartInSeconds: configuredStartInSeconds,
+      durationSeconds: durationSeconds,
+      programa: programa,
+      tipo: tipo,
+      material_tocando: material_tocando,
+      buff_rpg: buff_rpg
     };
-  }).filter(item => item !== null)
-    .sort((a, b) => a.configuredStartInSeconds - b.configuredStartInSeconds);
+  }).filter(item => item !== null);
 
   const timeline = [];
   let currentTimelineInSeconds = 0;
 
-  for (var i = 0; i < sortedItems.length; i++) {
-    const current = sortedItems[i];
+  for (var i = 0; i < parsedItems.length; i++) {
+    const current = parsedItems[i];
+    let actualStartInSeconds = null;
 
-    let actualStartInSeconds = current.configuredStartInSeconds;
-    if (actualStartInSeconds < currentTimelineInSeconds) {
-      actualStartInSeconds = currentTimelineInSeconds;
+    if (current.configuredStartInSeconds !== null && !isNaN(current.configuredStartInSeconds)) {
+      // Tem horário agendado de forma clara e explícita (ponto de ancoragem na programação)
+      actualStartInSeconds = current.configuredStartInSeconds;
+    } else {
+      // Sem horário fixo (vazio ou "Pendente" / "Fila").
+      // Encadear como fila imediata se o vídeo anterior pertencer ao MESMO programa!
+      if (timeline.length > 0) {
+        const lastInTimeline = timeline[timeline.length - 1];
+        if (lastInTimeline.programa === current.programa) {
+          actualStartInSeconds = lastInTimeline.endInSeconds;
+        }
+      }
     }
 
-    const actualEndInSeconds = actualStartInSeconds + current.durationSeconds;
-    currentTimelineInSeconds = actualEndInSeconds;
+    // Se conseguimos calcular uma hora de início no ar para este vídeo
+    if (actualStartInSeconds !== null) {
+      if (actualStartInSeconds < currentTimelineInSeconds) {
+        actualStartInSeconds = currentTimelineInSeconds;
+      }
 
-    const startHour = Math.floor(actualStartInSeconds / 3600);
-    const startMin = Math.floor((actualStartInSeconds % 3600) / 60);
-    const startSec = actualStartInSeconds % 60;
-    const estimatedStartTimeStr =
-      String(startHour).padStart(2, "0") + ":" +
-      String(startMin).padStart(2, "0") + ":" +
-      String(startSec).padStart(2, "0");
+      const actualEndInSeconds = actualStartInSeconds + current.durationSeconds;
+      currentTimelineInSeconds = actualEndInSeconds;
 
-    const videoIdClean = current.drive_video_id;
+      const startHour = Math.floor(actualStartInSeconds / 3600);
+      const startMin = Math.floor((actualStartInSeconds % 3600) / 60);
+      const startSec = actualStartInSeconds % 60;
+      const estimatedStartTimeStr =
+        String(startHour).padStart(2, "0") + ":" +
+        String(startMin).padStart(2, "0") + ":" +
+        String(startSec).padStart(2, "0");
 
-    // Nota: Esta URL gerada de fallback é substituída de forma transparente por uma rota interna de alta velocidade (/video) pelo player do site,
-    // que faz o download do vídeo em segundo plano diretamente para o cache do servidor local, garantindo zero travamentos e buffering.
-    const videoUrl = videoIdClean.startsWith("http")
-      ? videoIdClean
-      : `${PROXY_URL}/video?file=video_${videoIdClean}.mp4&secret=${WORKER_SECRET}`;
+      const videoIdClean = current.drive_video_id;
+      const videoUrl = videoIdClean.startsWith("http")
+        ? videoIdClean
+        : `${PROXY_URL}/video?file=video_${videoIdClean}.mp4&secret=${WORKER_SECRET}`;
 
-    timeline.push({
-      id: current.id,
-      rowNum: current.rowNum,
-      horarioCalculado: estimatedStartTimeStr,
-      startInSeconds: actualStartInSeconds,
-      endInSeconds: actualEndInSeconds,
-      durationSeconds: current.durationSeconds,
-      link_drive: videoUrl,
-      drive_video_id: videoIdClean,
-      programa: current.programa,
-      tipo: current.tipo,
-      material_tocando: current.material_tocando,
-      buff_rpg: current.buff_rpg
-    });
+      timeline.push({
+        id: current.id,
+        rowNum: current.rowNum,
+        horarioCalculado: estimatedStartTimeStr,
+        startInSeconds: actualStartInSeconds,
+        endInSeconds: actualEndInSeconds,
+        durationSeconds: current.durationSeconds,
+        link_drive: videoUrl,
+        drive_video_id: videoIdClean,
+        programa: current.programa,
+        tipo: current.tipo,
+        material_tocando: current.material_tocando,
+        buff_rpg: current.buff_rpg
+      });
+    }
   }
 
   return timeline;
 }
 
 // ============================================================
-// DETECÇÃO — Qual vídeo está no ar agora
+// DETECÇÃO — Qual vídeo está no ar agora ou próximo na fila
 // ============================================================
 
 function findActiveVideoInTimeline(timeline) {
@@ -313,6 +324,7 @@ function findActiveVideoInTimeline(timeline) {
   const nowInSeconds = getSecondsToday();
   let activeVideo = null;
 
+  // Busca se há algum vídeo sintonizado exatamente agora no ar
   for (var i = 0; i < timeline.length; i++) {
     const item = timeline[i];
     if (nowInSeconds >= item.startInSeconds && nowInSeconds < item.endInSeconds) {
@@ -321,7 +333,37 @@ function findActiveVideoInTimeline(timeline) {
     }
   }
 
+  // Se nenhum vídeo estiver passando agora, checamos se há um PRÓXIMO programa agendado para hoje.
+  // Caso sim, mostramos o status de "upcoming" com contagem regressiva impecável!
   if (!activeVideo) {
+    let nextItem = null;
+    for (var i = 0; i < timeline.length; i++) {
+      if (timeline[i].startInSeconds > nowInSeconds) {
+        nextItem = timeline[i];
+        break;
+      }
+    }
+
+    if (nextItem) {
+      const secondsToStart = nextItem.startInSeconds - nowInSeconds;
+      return {
+        status: "upcoming",
+        programa: nextItem.programa || "Empire TV",
+        tipo: nextItem.tipo || "Geral",
+        materialTocando: nextItem.material_tocando || "Abertura Oficial",
+        buff: nextItem.buff_rpg || "Sem Buff Ativo",
+        videoUrl: "",
+        startedAt: nextItem.horarioCalculado,
+        durationSeconds: nextItem.durationSeconds || 0,
+        seekOffset: 0,
+        secondsToStart: secondsToStart,
+        isBackup: false
+      };
+    }
+  }
+
+  if (!activeVideo) {
+    // Modo Loop Rotativo inteligente após o término de toda a grade
     const lastItem = timeline[timeline.length - 1];
     if (nowInSeconds > lastItem.endInSeconds) {
       const totalDuration = lastItem.endInSeconds - timeline[0].startInSeconds;

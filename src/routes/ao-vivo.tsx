@@ -241,6 +241,32 @@ export default function AoVivo() {
     }
   };
 
+  const [countdownSeconds, setCountdownSeconds] = useState<number | null>(null);
+
+  useEffect(() => {
+    if (current && current.status === "upcoming" && typeof (current as any).secondsToStart === "number") {
+      setCountdownSeconds((current as any).secondsToStart);
+    } else {
+      setCountdownSeconds(null);
+    }
+  }, [current]);
+
+  useEffect(() => {
+    if (countdownSeconds === null || countdownSeconds <= 0) return;
+    const t = setInterval(() => {
+      setCountdownSeconds(prev => {
+        if (prev === null || prev <= 1) {
+          clearInterval(t);
+          // Forçar resincronização automática para puxar o player quando o relógio zerar
+          fetchAndSync();
+          return 0;
+        }
+        return prev - 1;
+      });
+    }, 1000);
+    return () => clearInterval(t);
+  }, [countdownSeconds, fetchAndSync]);
+
   return (
     <div style={styles.page}>
       {/* Barra de Notificações / Alertas Inteligentes */}
@@ -260,6 +286,71 @@ export default function AoVivo() {
       )}
 
       <div style={styles.playerWrapper} className="relative group">
+        {/* Painel Profissional de Contagem Regressiva para Próxima Atração */}
+        {current && current.status === "upcoming" ? (
+          <div className="absolute inset-0 z-20 w-full h-full bg-zinc-950 flex flex-col items-center justify-center p-6 border-b border-violet-600/30 overflow-hidden select-none">
+            {/* Ambient Background Glow grid */}
+            <div className="absolute inset-0 bg-[linear-gradient(to_right,#1f1a3a_1px,transparent_1px),linear-gradient(to_bottom,#1f1a3a_1px,transparent_1px)] bg-[size:4rem_4rem] [mask-image:radial-gradient(ellipse_60%_50%_at_50%_50%,#000_70%,transparent_100%)] opacity-30" />
+            
+            <div className="absolute top-4 left-4 flex items-center gap-2 bg-zinc-900/80 px-3 py-1 rounded border border-zinc-800">
+              <span className="w-2.5 h-2.5 rounded-full bg-violet-500 animate-pulse" />
+              <span className="text-zinc-400 font-mono text-xs font-semibold tracking-wider uppercase">Sinal Estabelecido</span>
+            </div>
+
+            <div className="absolute top-4 right-4 bg-violet-950/60 border border-violet-500/30 text-violet-300 font-mono text-xs px-3 py-1 rounded font-semibold uppercase tracking-widest">
+              PRÉ-SHOW
+            </div>
+
+            <div className="z-10 text-center max-w-xl">
+              <span className="text-violet-500 font-bold tracking-wider text-sm uppercase block mb-1 drop-shadow-[0_0_8px_rgba(139,92,246,0.3)]">
+                📺 Próxima Atração Programada
+              </span>
+              <h2 className="text-white text-3xl font-extrabold tracking-tight mb-2 sm:text-4xl text-transparent bg-clip-text bg-gradient-to-r from-white via-zinc-200 to-violet-300">
+                {current.programa}
+              </h2>
+              <div className="inline-flex items-center gap-2 px-3 py-1 bg-zinc-900/90 rounded-full border border-zinc-800 text-xs text-zinc-400 mb-6 font-mono">
+                <span className="bg-violet-950 text-violet-300 px-2 py-0.5 rounded-full font-semibold uppercase">{current.tipo}</span>
+                <span>•</span>
+                <span>Inicia às {current.startedAt || "--:--"}</span>
+              </div>
+
+              {/* Contador com visores nixie digitais retro-estilizados */}
+              <div className="bg-zinc-900/60 border border-zinc-800/80 rounded-2xl p-6 mb-6 inline-block backdrop-blur-md shadow-2xl relative">
+                <div className="absolute -inset-0.5 bg-gradient-to-r from-violet-600 to-indigo-600 rounded-2xl opacity-10 blur" />
+                
+                <div className="relative flex justify-center items-center gap-4 text-white">
+                  <div className="flex flex-col items-center">
+                    <span className="text-4xl sm:text-6xl font-mono font-bold tracking-widest bg-zinc-950 text-violet-400 px-4 py-2 rounded-lg border border-zinc-800 shadow-inner min-w-[3.5rem] sm:min-w-[5rem] block">
+                      {countdownSeconds !== null ? String(Math.floor(countdownSeconds / 3600)).padStart(2, "0") : "00"}
+                    </span>
+                    <span className="text-[10px] text-zinc-500 uppercase tracking-widest mt-1.5 font-bold font-mono">Horas</span>
+                  </div>
+                  <span className="text-3xl sm:text-5xl font-mono font-bold text-violet-500 animate-pulse pb-5">:</span>
+                  <div className="flex flex-col items-center">
+                    <span className="text-4xl sm:text-6xl font-mono font-bold tracking-widest bg-zinc-950 text-violet-400 px-4 py-2 rounded-lg border border-zinc-800 shadow-inner min-w-[3.5rem] sm:min-w-[5rem] block">
+                      {countdownSeconds !== null ? String(Math.floor((countdownSeconds % 3600) / 60)).padStart(2, "0") : "00"}
+                    </span>
+                    <span className="text-[10px] text-zinc-500 uppercase tracking-widest mt-1.5 font-bold font-mono">Minutos</span>
+                  </div>
+                  <span className="text-3xl sm:text-5xl font-mono font-bold text-violet-500 animate-pulse pb-5">:</span>
+                  <div className="flex flex-col items-center">
+                    <span className="text-4xl sm:text-6xl font-mono font-bold tracking-widest bg-zinc-950 text-violet-400 px-4 py-2 rounded-lg border border-zinc-800 shadow-inner min-w-[3.5rem] sm:min-w-[5rem] block">
+                      {countdownSeconds !== null ? String(countdownSeconds % 60).padStart(2, "0") : "00"}
+                    </span>
+                    <span className="text-[10px] text-zinc-500 uppercase tracking-widest mt-1.5 font-bold font-mono">Segundos</span>
+                  </div>
+                </div>
+              </div>
+
+              {current.materialTocando && (
+                <p className="text-zinc-500 text-xs font-mono">
+                  🎵 Trilha selecionada de introdução: <span className="text-zinc-400 font-medium">{current.materialTocando}</span>
+                </p>
+              )}
+            </div>
+          </div>
+        ) : null}
+
         {/* Renderiza estática analógica retrô se houver falhas com o arquivo */}
         {useAnalogStatic ? (
           <div className="absolute inset-0 z-10 w-full h-full bg-black flex flex-col items-center justify-center">
@@ -343,7 +434,11 @@ export default function AoVivo() {
       {current && !loading && !useAnalogStatic && (
         <div style={styles.infoBar}>
           <div style={styles.infoLeft}>
-            <span style={styles.liveTag}>● AO VIVO</span>
+            {current.status === "upcoming" ? (
+              <span className="bg-violet-600 text-white font-bold px-2 py-0.5 rounded text-xs uppercase tracking-wider animate-pulse">📡 BREVEMENTE</span>
+            ) : (
+              <span style={styles.liveTag}>● AO VIVO</span>
+            )}
             <span style={styles.programa}>{current.programa}</span>
             <span style={styles.tipo}>{current.tipo}</span>
           </div>
