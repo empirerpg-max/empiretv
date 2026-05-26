@@ -1,5 +1,5 @@
 // ============================================================
-// EMPIRE TV — GOOGLE APPS SCRIPT COMPLETO
+// EMPIRE TV — GOOGLE APPS SCRIPT COMPLETO E DINÂMICO
 // ============================================================
 
 const SPREADSHEET_ID = "";
@@ -27,31 +27,7 @@ function doGet(e) {
       });
     }
 
-    const headers = rows[0];
-    const dataRows = rows.slice(1);
-
-    const rawSchedule = dataRows.map((row, index) => {
-      const item = {};
-      headers.forEach((header, colIndex) => {
-        const key = String(header).trim().toLowerCase();
-        if (key) item[key] = row[colIndex];
-      });
-
-      if (item["drive_video_id"] === undefined && row[0] !== undefined) item["drive_video_id"] = row[0];
-      if (item["horario"] === undefined && row[1] !== undefined) item["horario"] = row[1];
-      if (item["status"] === undefined && row[2] !== undefined) item["status"] = row[2];
-      if (item["programa"] === undefined && row[3] !== undefined) item["programa"] = row[3];
-      if (item["tipo"] === undefined && row[4] !== undefined) item["tipo"] = row[4];
-      if (item["material_tocando"] === undefined && row[5] !== undefined) item["material_tocando"] = row[5];
-      if (item["buff_rpg"] === undefined && row[6] !== undefined) item["buff_rpg"] = row[6];
-      if (item["duracao_segundos"] === undefined && row[7] !== undefined) item["duracao_segundos"] = row[7];
-
-      item.id = "prog_" + (index + 2);
-      item.rowNum = index + 2;
-      return item;
-    });
-
-    const activeTimeline = buildActiveTimeline(rawSchedule);
+    const activeTimeline = buildActiveTimeline(rows);
     const currentTransmission = findActiveVideoInTimeline(activeTimeline);
     atualizarLinhasTransmitidas(sheet, activeTimeline, currentTransmission);
 
@@ -68,63 +44,211 @@ function doGet(e) {
 }
 
 // ============================================================
-// TIMELINE — Monta a fila de vídeos
+// AUXILIADORES DE EXTRAÇÃO INTELIGENTES E RESILIENTES
 // ============================================================
 
-function buildActiveTimeline(schedule) {
-  const now = new Date();
-  const localTime = new Date(now.toLocaleString("en-US", { timeZone: "America/Sao_Paulo" }));
-  const todayFormattedYMD = localTime.getFullYear() + "-" +
-    String(localTime.getMonth() + 1).padStart(2, "0") + "-" +
-    String(localTime.getDate()).padStart(2, "0");
-
-  const sortedItems = schedule.map(item => {
-    let horarioStr = String(item["horario"] || "").trim();
-    if (!horarioStr) return null;
-
-    let datePart = todayFormattedYMD;
-    let timePart = "00:00";
-
-    if (horarioStr.includes(" ") || horarioStr.includes("-") || horarioStr.includes("/")) {
-      const parts = horarioStr.split(" ");
-      if (parts.length >= 2) {
-        datePart = parts[0].replace(/\//g, "-");
-        timePart = parts[1];
-      } else {
-        if (horarioStr.includes("-") || horarioStr.includes("/")) {
-          datePart = horarioStr.replace(/\//g, "-");
-          timePart = "00:00";
-        } else {
-          timePart = horarioStr;
-        }
-      }
-    } else {
-      timePart = horarioStr;
+// Extrai o ID de um arquivo do Google Drive a partir de qualquer string (IDs diretos ou links completos)
+function extractDriveId(val) {
+  if (!val) return "";
+  val = String(val).trim();
+  
+  // Se for uma string de ID direto (sem barras ou pontos, geralmente com ~33 caracteres)
+  if (/^[a-zA-Z0-9_-]{25,45}$/.test(val)) {
+    return val;
+  }
+  
+  // Se for uma URL do Google Drive compartilhada
+  const regexes = [
+    /\/d\/([a-zA-Z0-9_-]{25,45})/i,
+    /[?&]id=([a-zA-Z0-9_-]{25,45})/i,
+    /\/file\/d\/([a-zA-Z0-9_-]{25,45})/i
+  ];
+  for (var i = 0; i < regexes.length; i++) {
+    const match = val.match(regexes[i]);
+    if (match && match[1]) {
+      return match[1];
     }
+  }
+  return "";
+}
 
-    const tParts = timePart.split(":");
-    const hours = parseInt(tParts[0] || "0", 10);
-    const minutes = parseInt(tParts[1] || "0", 10);
-    const configuredStartInSeconds = (hours * 3600) + (minutes * 60);
+// Traduz o horário (em objeto Date ou String) de forma segura em segundos desde o início do dia
+function getSecondsFromValue(val) {
+  if (val instanceof Date) {
+    try {
+      const timeStr = Utilities.formatDate(val, "America/Sao_Paulo", "HH:mm:ss");
+      const parts = timeStr.split(":");
+      return (parseInt(parts[0], 10) * 3600) + (parseInt(parts[1], 10) * 60) + parseInt(parts[2], 10);
+    } catch (e) {
+      return (val.getHours() * 3600) + (val.getMinutes() * 60) + val.getSeconds();
+    }
+  }
+  
+  const str = String(val || "").trim();
+  if (!str) return null;
 
-    let duration = parseInt(item["duracao_segundos"] || "600", 10);
-    if (isNaN(duration) || duration <= 0) duration = 600;
+  // Se contiver o formato ISO 1899-12-30T11:51:28.000Z
+  if (str.includes("T")) {
+    const tParts = str.split("T")[1];
+    if (tParts) {
+      const match = tParts.match(/(\d{1,2}):(\d{2}):(\d{2})/);
+      if (match) {
+        return (parseInt(match[1], 10) * 3600) + (parseInt(match[2], 10) * 60) + parseInt(match[3], 10);
+      }
+    }
+  }
+
+  // Tenta extrair qualquer padrão HH:MM:SS ou HH:MM
+  const matches = str.match(/(\d{1,2}):(\d{2})(?::(\d{2}))?/);
+  if (matches) {
+    const hours = parseInt(matches[1], 10);
+    const minutes = parseInt(matches[2], 10);
+    const seconds = matches[3] ? parseInt(matches[3], 10) : 0;
+    return (hours * 3600) + (minutes * 60) + seconds;
+  }
+  return null;
+}
+
+// Procura por ID do Drive analisando células do cabeçalho por apelidos ou mapeando qualquer coluna contidatária
+function findDriveIdInRow(row, headers) {
+  const preferredAliases = ["drive video", "link drive", "link do drive", "video", "drive id", "url", "status"];
+  for (var j = 0; j < preferredAliases.length; j++) {
+    const alias = preferredAliases[j];
+    for (var i = 0; i < headers.length; i++) {
+      const h = String(headers[i]).trim().toLowerCase().replace(/_/g, " ");
+      if (h === alias || h.includes(alias)) {
+        const val = String(row[i] || "").trim();
+        const id = extractDriveId(val);
+        if (id) return id;
+      }
+    }
+  }
+  // Fallback geral: vasculha todas as colunas até encontrar um ID válido
+  for (var i = 0; i < row.length; i++) {
+    const val = String(row[i] || "").trim();
+    const id = extractDriveId(val);
+    if (id) return id;
+  }
+  return "";
+}
+
+// Procura e calcula o horário da transmissão
+function findHorarioSecondsInRow(row, headers) {
+  const aliases = ["horario", "horário", "hora", "data", "schedule", "time"];
+  for (var j = 0; j < aliases.length; j++) {
+    const alias = aliases[j];
+    for (var i = 0; i < headers.length; i++) {
+      const h = String(headers[i]).trim().toLowerCase().replace(/_/g, " ");
+      if (h === alias || h.includes(alias)) {
+        const secs = getSecondsFromValue(row[i]);
+        if (secs !== null && !isNaN(secs)) return secs;
+      }
+    }
+  }
+  // Fallback: tenta analisar todas as colunas
+  for (var i = 0; i < row.length; i++) {
+    const val = row[i];
+    const secs = getSecondsFromValue(val);
+    if (secs !== null && !isNaN(secs)) return secs;
+  }
+  return null;
+}
+
+// Busca e valida a duração em segundos
+function findDurationSecondsInRow(row, headers) {
+  const aliases = ["duracao segundos", "duracao", "duraçao", "duration", "tempo", "segundos"];
+  for (var j = 0; j < aliases.length; j++) {
+    const alias = aliases[j];
+    for (var i = 0; i < headers.length; i++) {
+      const h = String(headers[i]).trim().toLowerCase().replace(/_/g, " ");
+      if (h === alias || h.includes(alias)) {
+        const val = parseInt(row[i], 10);
+        if (!isNaN(val) && val > 0) return val;
+      }
+    }
+  }
+  // Vasculha qualquer número solto entre 10s e 86400s (24h)
+  for (var i = 0; i < row.length; i++) {
+    const val = row[i];
+    if (val !== "" && !isNaN(val)) {
+      const num = parseInt(val, 10);
+      if (num > 10 && num < 86400) return num;
+    }
+  }
+  return 600; // Tempo de backup padrão (10 minutos)
+}
+
+// Busca dinamicamente os valores de metadados baseado em mapeamento de colunas
+function findMetadataInRow(row, headers, fieldType) {
+  var aliases = [];
+  var defaultVal = "";
+  if (fieldType === "programa") {
+    aliases = ["programa", "show", "titulo", "título"];
+    defaultVal = "Empire TV";
+  } else if (fieldType === "tipo") {
+    aliases = ["tipo", "categoria", "type"];
+    defaultVal = "Clipe";
+  } else if (fieldType === "material") {
+    aliases = ["material tocando", "musica", "música", "faixa", "track", "song"];
+    defaultVal = "Música em Transmissão";
+  } else if (fieldType === "buff") {
+    aliases = ["buff rpg", "buff", "bonus", "bônus"];
+    defaultVal = "Sem Buff Ativo";
+  }
+
+  for (var j = 0; j < aliases.length; j++) {
+    var alias = aliases[j];
+    for (var i = 0; i < headers.length; i++) {
+      var h = String(headers[i]).trim().toLowerCase().replace(/_/g, " ");
+      if (h === alias || h.includes(alias)) {
+        return String(row[i] || "").trim() || defaultVal;
+      }
+    }
+  }
+  return defaultVal;
+}
+
+// ============================================================
+// TIMELINE — Monta a fila de vídeos estruturada cronologicamente
+// ============================================================
+
+function buildActiveTimeline(rows) {
+  if (rows.length <= 1) return [];
+  const headers = rows[0];
+  const dataRows = rows.slice(1);
+
+  const sortedItems = dataRows.map((row, index) => {
+    const driveVideoId = findDriveIdInRow(row, headers);
+    if (!driveVideoId) return null; // Ignora se não houver arquivo configurado
+
+    const configuredStartInSeconds = findHorarioSecondsInRow(row, headers);
+    if (configuredStartInSeconds === null || isNaN(configuredStartInSeconds)) return null;
+
+    const durationSeconds = findDurationSecondsInRow(row, headers);
+
+    const programa = findMetadataInRow(row, headers, "programa");
+    const tipo = findMetadataInRow(row, headers, "tipo");
+    const material_tocando = findMetadataInRow(row, headers, "material");
+    const buff_rpg = findMetadataInRow(row, headers, "buff");
 
     return {
-      ...item,
-      normalizedDate: datePart,
-      normalizedTime: timePart,
-      scheduledDateTimeStr: datePart + " " + timePart,
+      id: "prog_" + (index + 2),
+      rowNum: index + 2,
+      drive_video_id: driveVideoId,
       configuredStartInSeconds,
-      durationSeconds: duration
+      durationSeconds,
+      programa,
+      tipo,
+      material_tocando,
+      buff_rpg
     };
   }).filter(item => item !== null)
-    .sort((a, b) => a.scheduledDateTimeStr.localeCompare(b.scheduledDateTimeStr));
+    .sort((a, b) => a.configuredStartInSeconds - b.configuredStartInSeconds);
 
   const timeline = [];
   let currentTimelineInSeconds = 0;
 
-  for (let i = 0; i < sortedItems.length; i++) {
+  for (var i = 0; i < sortedItems.length; i++) {
     const current = sortedItems[i];
 
     let actualStartInSeconds = current.configuredStartInSeconds;
@@ -143,10 +267,8 @@ function buildActiveTimeline(schedule) {
       String(startMin).padStart(2, "0") + ":" +
       String(startSec).padStart(2, "0");
 
-    const videoIdClean = String(current["drive_video_id"] || "").trim();
+    const videoIdClean = current.drive_video_id;
 
-    // URL do vídeo: usa o R2 via Worker se for ID do Drive,
-    // ou usa direto se já vier como URL completa
     const videoUrl = videoIdClean.startsWith("http")
       ? videoIdClean
       : `${PROXY_URL}/video?file=video_${videoIdClean}.mp4&secret=${WORKER_SECRET}`;
@@ -154,18 +276,16 @@ function buildActiveTimeline(schedule) {
     timeline.push({
       id: current.id,
       rowNum: current.rowNum,
-      horario: current["horario"],
       horarioCalculado: estimatedStartTimeStr,
       startInSeconds: actualStartInSeconds,
       endInSeconds: actualEndInSeconds,
       durationSeconds: current.durationSeconds,
       link_drive: videoUrl,
       drive_video_id: videoIdClean,
-      status: current["status"] || "Pendente",
-      programa: current["programa"] || "Empire TV",
-      tipo: current["tipo"] || "Clipe",
-      material_tocando: current["material_tocando"] || "Música em Transmissão",
-      buff_rpg: current["buff_rpg"] || "Sem Buff Ativo"
+      programa: current.programa,
+      tipo: current.tipo,
+      material_tocando: current.material_tocando,
+      buff_rpg: current.buff_rpg
     });
   }
 
@@ -186,7 +306,7 @@ function findActiveVideoInTimeline(timeline) {
       buff: "+10% Regeneração de Mana",
       videoUrl: "https://commondatastorage.googleapis.com/gtv-videos-bucket/sample/BigBuckBunny.mp4",
       seekOffset: 0,
-      duration: 600,
+      durationSeconds: 600,
       isBackup: true
     };
   }
@@ -194,7 +314,7 @@ function findActiveVideoInTimeline(timeline) {
   const nowInSeconds = getSecondsToday();
   let activeVideo = null;
 
-  for (let i = 0; i < timeline.length; i++) {
+  for (var i = 0; i < timeline.length; i++) {
     const item = timeline[i];
     if (nowInSeconds >= item.startInSeconds && nowInSeconds < item.endInSeconds) {
       activeVideo = item;
@@ -210,7 +330,7 @@ function findActiveVideoInTimeline(timeline) {
       const relativeOffset = secSinceEnd % totalDuration;
       const targetSec = timeline[0].startInSeconds + relativeOffset;
 
-      for (let i = 0; i < timeline.length; i++) {
+      for (var i = 0; i < timeline.length; i++) {
         const item = timeline[i];
         if (targetSec >= item.startInSeconds && targetSec < item.endInSeconds) {
           return buildResponsePayload(item, targetSec - item.startInSeconds);
@@ -233,7 +353,7 @@ function buildResponsePayload(item, seekOffset) {
     programa: item.programa || "Empire TV",
     tipo: item.tipo || "Geral",
     materialTocando: item.material_tocando || "Música no Ar",
-    buff: item.buff_rpg || "+15 Stamina",
+    buff: item.buff_rpg || "Sem Buff Ativo",
     videoUrl: item.link_drive,
     drive_video_id: item.drive_video_id,
     startedAt: item.horarioCalculado,
@@ -266,7 +386,7 @@ function atualizarLinhasTransmitidas(sheet, timeline, currentVideo) {
       }
     }
 
-    timeline.forEach(item => {
+    timeline.forEach(function(item) {
       if (item.rowNum !== currentIdx && item.rowNum <= rows.length) {
         if (nowInSeconds > item.endInSeconds) {
           const itemStatus = String(rows[item.rowNum - 1][statusColIdx - 1]).trim().toLowerCase();
@@ -297,33 +417,25 @@ function limparProgramasVencidosSet(sheet) {
 
     const nowInSeconds = getSecondsToday();
 
-    for (let i = rows.length - 1; i >= 1; i--) {
+    for (var i = rows.length - 1; i >= 1; i--) {
       const row = rows[i];
       const statusVal = String(row[statusColIdx - 1]).trim().toLowerCase();
-      const horarioStr = String(row[horarioColIdx - 1]).trim();
       let deveApagar = false;
 
       if (statusVal === "concluido" || statusVal === "concluído") {
         deveApagar = true;
-      } else if (horarioStr) {
-        try {
-          let timePart = "00:00";
-          if (horarioStr.includes(" ")) {
-            timePart = horarioStr.split(" ")[1];
-          } else if (!horarioStr.includes("-") && !horarioStr.includes("/")) {
-            timePart = horarioStr;
-          }
-          const tParts = timePart.split(":");
-          const hours = parseInt(tParts[0] || "0", 10);
-          const minutes = parseInt(tParts[1] || "0", 10);
-          const itemStartSeconds = (hours * 3600) + (minutes * 60);
+      } else {
+        const itemStartSeconds = getSecondsFromValue(row[horarioColIdx - 1]);
+        if (itemStartSeconds !== null && !isNaN(itemStartSeconds)) {
           const duracaoIdx = headers.findIndex(h => String(h).trim().toLowerCase() === "duracao_segundos");
-          const duracaoSec = parseInt(row[duracaoIdx] || "600", 10);
-
+          let duracaoSec = 600;
+          if (duracaoIdx >= 0) {
+            duracaoSec = parseInt(row[duracaoIdx], 10) || 600;
+          }
           if (nowInSeconds > (itemStartSeconds + duracaoSec + 1800)) {
             deveApagar = true;
           }
-        } catch (err) {}
+        }
       }
 
       if (deveApagar) sheet.deleteRow(i + 1);
@@ -346,24 +458,18 @@ function preCarregarProximosVideos() {
   const nowSec = getSecondsToday();
   const limitePreCarga = nowSec + 3600; // janela de 1 hora à frente
   const statusColIdx = headers.findIndex(h => String(h).trim().toLowerCase() === "status") + 1;
+  if (statusColIdx <= 0) return;
 
   rows.slice(1).forEach((row, i) => {
-    const item = {};
-    headers.forEach((h, ci) => item[String(h).trim().toLowerCase()] = row[ci]);
-
-    const status = String(item["status"] || "").toLowerCase();
+    const status = String(row[statusColIdx - 1] || "").toLowerCase();
     if (["concluido", "transmitindo", "carregado"].includes(status)) return;
 
-    const horarioStr = String(item["horario"] || "").trim();
-    if (!horarioStr) return;
-
-    const timePart = horarioStr.includes(" ") ? horarioStr.split(" ")[1] : horarioStr;
-    const [h, m] = timePart.split(":").map(Number);
-    const itemSec = (h * 3600) + (m * 60);
+    const itemSec = findHorarioSecondsInRow(row, headers);
+    if (itemSec === null || isNaN(itemSec)) return;
 
     if (itemSec < nowSec || itemSec > limitePreCarga) return;
 
-    const driveId = String(item["drive_video_id"] || "").trim();
+    const driveId = findDriveIdInRow(row, headers);
     if (!driveId || driveId.startsWith("http")) return;
 
     const filename = `video_${driveId}.mp4`;
@@ -397,15 +503,14 @@ function deletarVideosTransmitidos() {
   if (rows.length <= 1) return;
 
   const headers = rows[0];
+  const statusColIdx = headers.findIndex(h => String(h).trim().toLowerCase() === "status") + 1;
+  if (statusColIdx <= 0) return;
 
   rows.slice(1).forEach((row) => {
-    const item = {};
-    headers.forEach((h, ci) => item[String(h).trim().toLowerCase()] = row[ci]);
-
-    const status = String(item["status"] || "").toLowerCase();
+    const status = String(row[statusColIdx - 1] || "").toLowerCase();
     if (status !== "concluido") return;
 
-    const driveId = String(item["drive_video_id"] || "").trim();
+    const driveId = findDriveIdInRow(row, headers);
     if (!driveId || driveId.startsWith("http")) return;
 
     const filename = `video_${driveId}.mp4`;
@@ -427,7 +532,9 @@ function deletarVideosTransmitidos() {
 // ============================================================
 
 function configurarTriggers() {
-  ScriptApp.getProjectTriggers().forEach(t => ScriptApp.deleteTrigger(t));
+  ScriptApp.getProjectTriggers().forEach(function(t) {
+    ScriptApp.deleteTrigger(t);
+  });
 
   ScriptApp.newTrigger("preCarregarProximosVideos")
     .timeBased().everyMinutes(30).create();
