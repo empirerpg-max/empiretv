@@ -199,21 +199,19 @@ def transmit_playlist(video_paths, rtmp_url, rtmp_key):
             f.write(f"file '{p}'\n")
 
     raw_url = rtmp_url.rstrip("/")
-    if raw_url.startswith("rtmps://"):
-        host_path = raw_url.replace("rtmps://", "")
-        dest = f"rtmps://{host_path}/app/{rtmp_key}"
+    # Monta URL correta para RTMPS
+    if "rtmps://" in raw_url:
+        dest = f"{raw_url}/{rtmp_key}"
     else:
-        dest = f"{raw_url}/app/{rtmp_key}"
+        dest = f"{raw_url}/{rtmp_key}"
 
-    log(f"Destino RTMP: {raw_url}/app/<chave_oculta>")
+    log(f"Destino RTMP: {raw_url}/<chave_oculta>")
     log(f"Iniciando FFmpeg — {len(video_paths)} vídeo(s) em sequência contínua...")
 
     cmd = [
-        "ffmpeg",
-        "-re",
+        "ffmpeg", "-re",
         "-f", "concat", "-safe", "0",
         "-i", list_path,
-        # Encoding
         "-c:v", "libx264",
         "-preset", "veryfast",
         "-tune", "zerolatency",
@@ -227,14 +225,7 @@ def transmit_playlist(video_paths, rtmp_url, rtmp_key):
         "-c:a", "aac",
         "-b:a", "160k",
         "-ar", "44100",
-        # Output com reconnect e timeout para RTMPS estavel
         "-f", "flv",
-        "-rtmp_live", "live",
-        "-timeout", "30000000",
-        "-reconnect", "1",
-        "-reconnect_at_eof", "0",
-        "-reconnect_streamed", "1",
-        "-reconnect_delay_max", "5",
         dest
     ]
     process = subprocess.Popen(cmd, stdout=subprocess.PIPE, stderr=subprocess.STDOUT, text=True)
