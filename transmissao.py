@@ -7,6 +7,7 @@ from datetime import datetime
 import pytz
 import gspread
 from oauth2client.service_account import ServiceAccountCredentials
+import requests
 
 TZ_SP = pytz.timezone("America/Sao_Paulo")
 
@@ -73,11 +74,6 @@ def get_pending_videos(sheet):
     return videos
 
 def parse_datetime(data_str, horario_str, now):
-    """
-    Tenta combinar Data + Horario em um datetime com fuso.
-    Se Data estiver vazia, assume a data de hoje.
-    Formatos suportados: DD/MM/AAAA + HH:MM ou só HH:MM
-    """
     combined = f"{data_str} {horario_str}".strip() if data_str else horario_str.strip()
     fmts = [
         "%d/%m/%Y %H:%M",
@@ -111,48 +107,71 @@ def extract_drive_id(val):
     return ""
 
 def download_video(drive_id, output_path):
+    """
+    Baixa vídeo do Google Drive usando requests com sessão.
+    Funciona para arquivos pequenos E grandes (+100MB) automaticamente.
+    """
+    MIN_BYTES = 5 * 1024 * 1024  # 5 MB mínimo para considerar válido
+
     if os.path.exists(output_path):
         size = os.path.getsize(output_path)
-        if size > 1024 * 1024:
+        if size > MIN_BYTES:
             log(f"Já em cache: {output_path} ({size/1024/1024:.1f} MB)")
             return True
         os.remove(output_path)
+
     log(f"Baixando ID: {drive_id} → {output_path}")
+
+    session = requests.Session()
+    url = f"https://drive.google.com/uc?export=download&id={drive_id}"
+
     try:
-        result = subprocess.run(
-            ["gdown", "--id", drive_id, "-O", output_path, "--remaining-ok"],
-            capture_output=True, text=True, timeout=300
-        )
-        if result.returncode == 0 and os.path.exists(output_path) and os.path.getsize(output_path) > 1024 * 1024:
-            log(f"Download OK via gdown: {os.path.getsize(output_path)/1024/1024:.1f} MB")
+        # Primeira requisição — pega cookies e detecta aviso de arquivo grande
+        resp = session.get(url, stream=True, timeout=30)
+
+        # Se vier HTML (aviso de arquivo grande), extrai token de confirmação
+        content_type = resp.headers.get("Content-Type", "")
+        if "text/html" in content_type:
+            html = resp.text
+            # Tenta extrair token do formulário de confirmação
+            import re
+            token = ""
+            m = re.search(r'name="uuid"\s+value="([^"]+)"', html)
+            if m:
+                token = m.group(1)
+                url = f"https://drive.google.com/uc?export=download&id={drive_id}&confirm=t&uuid={token}"
+            else:
+                m = re.search(r'confirm=([0-9A-Za-z_\-]+)', html)
+                if m:
+                    token = m.group(1)
+                    url = f"https://drive.google.com/uc?export=download&id={drive_id}&confirm={token}"
+                else:
+                    url = f"https://drive.google.com/uc?export=download&id={drive_id}&confirm=t"
+            log(f"  Arquivo grande detectado — token: '{token or 't'}'. Refazendo download...")
+            resp = session.get(url, stream=True, timeout=60)
+
+        # Salva o arquivo em chunks
+        total = 0
+        with open(output_path, "wb") as f:
+            for chunk in resp.iter_content(chunk_size=1024 * 1024):
+                if chunk:
+                    f.write(chunk)
+                    total += len(chunk)
+
+        if total > MIN_BYTES:
+            log(f"Download OK: {total/1024/1024:.1f} MB")
             return True
-        log(f"gdown falhou: {result.stderr[:200]}")
+        else:
+            log(f"Arquivo muito pequeno ({total} bytes) — Drive bloqueou. Verifique permissão 'Qualquer pessoa com o link'.")
+            if os.path.exists(output_path):
+                os.remove(output_path)
+            return False
+
     except Exception as e:
-        log(f"gdown erro: {e}")
-    try:
-        subprocess.run(
-            f"curl -sc /tmp/gdrive_cookie.txt 'https://drive.google.com/uc?export=download&id={drive_id}' -o /dev/null",
-            shell=True, timeout=30
-        )
-        confirm = ""
-        if os.path.exists("/tmp/gdrive_cookie.txt"):
-            with open("/tmp/gdrive_cookie.txt") as f:
-                for line in f:
-                    if "download_warning" in line:
-                        confirm = line.strip().split()[-1]
-                        break
-        url = f"https://drive.google.com/uc?export=download&confirm={confirm or 't'}&id={drive_id}"
-        result = subprocess.run(
-            ["curl", "-L", "-b", "/tmp/gdrive_cookie.txt", url, "-o", output_path],
-            capture_output=True, timeout=300
-        )
-        if os.path.exists(output_path) and os.path.getsize(output_path) > 1024 * 1024:
-            log(f"Download OK via curl: {os.path.getsize(output_path)/1024/1024:.1f} MB")
-            return True
-    except Exception as e:
-        log(f"curl erro: {e}")
-    log(f"FALHA no download do ID: {drive_id}")
-    return False
+        log(f"Erro no download: {e}")
+        if os.path.exists(output_path):
+            os.remove(output_path)
+        return False
 
 def download_all_parallel(videos):
     results = {}
