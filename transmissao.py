@@ -108,10 +108,11 @@ def extract_drive_id(val):
 
 def download_video(drive_id, output_path):
     """
-    Baixa vídeo do Google Drive usando requests com sessão.
-    Funciona para arquivos pequenos E grandes (+100MB) automaticamente.
+    Baixa vídeo do Google Drive.
+    Tenta yt-dlp primeiro (mais confiável para arquivos grandes),
+    com fallback para requests.
     """
-    MIN_BYTES = 5 * 1024 * 1024  # 5 MB mínimo para considerar válido
+    MIN_BYTES = 5 * 1024 * 1024  # 5 MB mínimo
 
     if os.path.exists(output_path):
         size = os.path.getsize(output_path)
@@ -121,57 +122,64 @@ def download_video(drive_id, output_path):
         os.remove(output_path)
 
     log(f"Baixando ID: {drive_id} → {output_path}")
+    url = f"https://drive.google.com/file/d/{drive_id}/view"
 
-    session = requests.Session()
-    url = f"https://drive.google.com/uc?export=download&id={drive_id}"
-
+    # Método 1: yt-dlp
     try:
-        # Primeira requisição — pega cookies e detecta aviso de arquivo grande
-        resp = session.get(url, stream=True, timeout=30)
+        result = subprocess.run(
+            ["yt-dlp", "--no-playlist", "-o", output_path, url],
+            capture_output=True, text=True, timeout=600
+        )
+        if result.returncode == 0 and os.path.exists(output_path) and os.path.getsize(output_path) > MIN_BYTES:
+            log(f"Download OK via yt-dlp: {os.path.getsize(output_path)/1024/1024:.1f} MB")
+            return True
+        log(f"yt-dlp falhou (código {result.returncode}): {result.stderr[-200:]}")
+    except Exception as e:
+        log(f"yt-dlp erro: {e}")
 
-        # Se vier HTML (aviso de arquivo grande), extrai token de confirmação
+    # Método 2: requests com cookies e User-Agent de navegador
+    try:
+        session = requests.Session()
+        session.headers.update({
+            "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/124.0.0.0 Safari/537.36"
+        })
+        dl_url = f"https://drive.google.com/uc?export=download&id={drive_id}"
+        resp = session.get(dl_url, stream=True, timeout=30)
         content_type = resp.headers.get("Content-Type", "")
         if "text/html" in content_type:
-            html = resp.text
-            # Tenta extrair token do formulário de confirmação
             import re
+            html = resp.text
             token = ""
             m = re.search(r'name="uuid"\s+value="([^"]+)"', html)
             if m:
                 token = m.group(1)
-                url = f"https://drive.google.com/uc?export=download&id={drive_id}&confirm=t&uuid={token}"
             else:
                 m = re.search(r'confirm=([0-9A-Za-z_\-]+)', html)
                 if m:
                     token = m.group(1)
-                    url = f"https://drive.google.com/uc?export=download&id={drive_id}&confirm={token}"
-                else:
-                    url = f"https://drive.google.com/uc?export=download&id={drive_id}&confirm=t"
-            log(f"  Arquivo grande detectado — token: '{token or 't'}'. Refazendo download...")
-            resp = session.get(url, stream=True, timeout=60)
-
-        # Salva o arquivo em chunks
+            confirm_param = f"&uuid={token}" if token and len(token) > 10 else ""
+            dl_url = f"https://drive.google.com/uc?export=download&id={drive_id}&confirm=t{confirm_param}"
+            log(f"  Refazendo com token: '{token[:20] if token else 't'}'")
+            resp = session.get(dl_url, stream=True, timeout=60)
         total = 0
         with open(output_path, "wb") as f:
             for chunk in resp.iter_content(chunk_size=1024 * 1024):
                 if chunk:
                     f.write(chunk)
                     total += len(chunk)
-
         if total > MIN_BYTES:
-            log(f"Download OK: {total/1024/1024:.1f} MB")
+            log(f"Download OK via requests: {total/1024/1024:.1f} MB")
             return True
-        else:
-            log(f"Arquivo muito pequeno ({total} bytes) — Drive bloqueou. Verifique permissão 'Qualquer pessoa com o link'.")
-            if os.path.exists(output_path):
-                os.remove(output_path)
-            return False
-
-    except Exception as e:
-        log(f"Erro no download: {e}")
+        log(f"requests: arquivo muito pequeno ({total} bytes) — Drive bloqueou.")
         if os.path.exists(output_path):
             os.remove(output_path)
-        return False
+    except Exception as e:
+        log(f"requests erro: {e}")
+        if os.path.exists(output_path):
+            os.remove(output_path)
+
+    log(f"FALHA TOTAL no download do ID: {drive_id}")
+    return False
 
 def download_all_parallel(videos):
     results = {}
