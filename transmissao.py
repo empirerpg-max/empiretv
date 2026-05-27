@@ -193,22 +193,12 @@ def validate_video(path):
         return False
 
 def build_rtmp_dest(rtmp_url, rtmp_key):
-    """
-    Monta a URL de destino RTMPS corretamente.
-    RTMP_URL esperado: rtmps://ingest.global-contribute.live-video.net:443/app
-    RTMP_KEY esperado: sk_us-west-2_...
-    Resultado:        rtmps://ingest.global-contribute.live-video.net:443/app/sk_us-west-2_...
-    """
     base = rtmp_url.rstrip("/")
     key  = rtmp_key.strip()
-
-    # Se a chave já estiver embutida na URL, não duplicar
     if key and base.endswith(key):
         dest = base
     else:
         dest = f"{base}/{key}"
-
-    # Log de diagnóstico: mostra host + path sem expor a chave
     try:
         from urllib.parse import urlparse
         p = urlparse(dest)
@@ -220,7 +210,6 @@ def build_rtmp_dest(rtmp_url, rtmp_key):
         log(f"[RTMP] URL final : {p.scheme}://{p.netloc}{safe_path}")
     except Exception:
         log(f"[RTMP] Destino montado (log detalhado falhou)")
-
     return dest
 
 def transmit_playlist(video_paths, rtmp_url, rtmp_key):
@@ -232,6 +221,7 @@ def transmit_playlist(video_paths, rtmp_url, rtmp_key):
     dest = build_rtmp_dest(rtmp_url, rtmp_key)
 
     log(f"Iniciando FFmpeg — {len(video_paths)} vídeo(s) em sequência contínua...")
+    log(f"[CONFIG] 30fps | 6500k vbr | 13000k buf | aac 160k")
 
     cmd = [
         "ffmpeg", "-re",
@@ -240,12 +230,12 @@ def transmit_playlist(video_paths, rtmp_url, rtmp_key):
         "-c:v", "libx264",
         "-preset", "veryfast",
         "-tune", "zerolatency",
-        "-b:v", "8000k",
-        "-maxrate", "8000k",
-        "-bufsize", "16000k",
-        "-r", "60",
-        "-g", "120",
-        "-keyint_min", "120",
+        "-b:v", "6500k",
+        "-maxrate", "6500k",
+        "-bufsize", "13000k",
+        "-r", "30",
+        "-g", "60",
+        "-keyint_min", "60",
         "-sc_threshold", "0",
         "-c:a", "aac",
         "-b:a", "160k",
@@ -312,7 +302,6 @@ def main():
 
     update_status(sheet, [v["row"] for v in videos], "Transmitindo")
 
-    # FASE 1: Download + normalização em ordem estrita
     log("=== FASE 1: Preparando vídeos em ordem ===")
     video_paths = []
     failed_rows = []
@@ -355,7 +344,6 @@ def main():
         update_status(sheet, [v["row"] for v in videos], "Falha")
         sys.exit(1)
 
-    # FASE 2: Transmissão única e contínua
     log(f"=== FASE 2: Transmitindo {len(video_paths)} vídeo(s) sem interrupção ===")
     for i, (path, _) in enumerate(video_paths):
         log(f"  [{i+1}] {os.path.basename(path)}")
