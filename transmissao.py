@@ -192,20 +192,45 @@ def validate_video(path):
     except Exception:
         return False
 
+def build_rtmp_dest(rtmp_url, rtmp_key):
+    """
+    Monta a URL de destino RTMPS corretamente.
+    RTMP_URL esperado: rtmps://ingest.global-contribute.live-video.net:443/app
+    RTMP_KEY esperado: sk_us-west-2_...
+    Resultado:        rtmps://ingest.global-contribute.live-video.net:443/app/sk_us-west-2_...
+    """
+    base = rtmp_url.rstrip("/")
+    key  = rtmp_key.strip()
+
+    # Se a chave já estiver embutida na URL, não duplicar
+    if key and base.endswith(key):
+        dest = base
+    else:
+        dest = f"{base}/{key}"
+
+    # Log de diagnóstico: mostra host + path sem expor a chave
+    try:
+        from urllib.parse import urlparse
+        p = urlparse(dest)
+        path_parts = p.path.split("/")
+        safe_path = "/".join(path_parts[:-1]) + "/<chave_oculta>"
+        log(f"[RTMP] Protocolo : {p.scheme}")
+        log(f"[RTMP] Host      : {p.netloc}")
+        log(f"[RTMP] Caminho   : {safe_path}")
+        log(f"[RTMP] URL final : {p.scheme}://{p.netloc}{safe_path}")
+    except Exception:
+        log(f"[RTMP] Destino montado (log detalhado falhou)")
+
+    return dest
+
 def transmit_playlist(video_paths, rtmp_url, rtmp_key):
     list_path = "/tmp/ffmpeg_playlist.txt"
     with open(list_path, "w") as f:
         for p in video_paths:
             f.write(f"file '{p}'\n")
 
-    raw_url = rtmp_url.rstrip("/")
-    # Monta URL correta para RTMPS
-    if "rtmps://" in raw_url:
-        dest = f"{raw_url}/{rtmp_key}"
-    else:
-        dest = f"{raw_url}/{rtmp_key}"
+    dest = build_rtmp_dest(rtmp_url, rtmp_key)
 
-    log(f"Destino RTMP: {raw_url}/<chave_oculta>")
     log(f"Iniciando FFmpeg — {len(video_paths)} vídeo(s) em sequência contínua...")
 
     cmd = [
