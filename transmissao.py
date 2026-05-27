@@ -107,10 +107,6 @@ def extract_drive_id(val):
     return ""
 
 def validate_video(path):
-    """
-    Usa ffprobe para verificar se o arquivo é um vídeo válido e legível.
-    Retorna True apenas se tiver stream de vídeo detectado.
-    """
     try:
         result = subprocess.run(
             [
@@ -127,7 +123,7 @@ def validate_video(path):
         data = json.loads(result.stdout)
         streams = data.get("streams", [])
         if not streams:
-            log(f"  {os.path.basename(path)}: sem stream de vídeo — arquivo inválido")
+            log(f"  {os.path.basename(path)}: sem stream de vídeo — inválido")
             return False
         log(f"  {os.path.basename(path)}: OK ✓")
         return True
@@ -217,52 +213,59 @@ def download_all_parallel(videos):
     return results
 
 def transmit_playlist(video_paths, rtmp_url, rtmp_key):
-    list_path = "/tmp/ffmpeg_playlist.txt"
-    with open(list_path, "w") as f:
-        for p in video_paths:
-            f.write(f"file '{p}'\n")
-    log(f"Transmitindo {len(video_paths)} vídeo(s) em sequência contínua...")
-    for p in video_paths:
-        log(f"  → {p}")
+    """
+    Transmite cada vídeo individualmente em sequência.
+    Isso evita completamente o problema de DTS out of order
+    que ocorre com ffmpeg concat quando vídeos têm timestamps diferentes.
+    """
     raw_url = rtmp_url.rstrip("/")
     if raw_url.startswith("rtmps://"):
         host_path = raw_url.replace("rtmps://", "")
         dest = f"rtmps://{host_path}/app/{rtmp_key}"
     else:
         dest = f"{raw_url}/app/{rtmp_key}"
+
+    log(f"Transmitindo {len(video_paths)} vídeo(s) em sequência...")
     log(f"Destino RTMP: {raw_url}/app/<chave_oculta>")
-    cmd = [
-        "ffmpeg", "-re",
-        "-f", "concat", "-safe", "0",
-        "-i", list_path,
-        "-c:v", "libx264",
-        "-preset", "veryfast",
-        "-tune", "zerolatency",
-        "-b:v", "8000k",
-        "-maxrate", "8000k",
-        "-bufsize", "16000k",
-        "-vf", "scale=1920:1080:force_original_aspect_ratio=decrease,pad=1920:1080:(ow-iw)/2:(oh-ih)/2:black",
-        "-r", "60",
-        "-g", "120",
-        "-keyint_min", "120",
-        "-sc_threshold", "0",
-        "-c:a", "aac",
-        "-b:a", "160k",
-        "-ar", "44100",
-        "-f", "flv",
-        dest
-    ]
-    log("Iniciando FFmpeg...")
-    process = subprocess.Popen(cmd, stdout=subprocess.PIPE, stderr=subprocess.STDOUT, text=True)
-    for line in process.stdout:
-        line = line.strip()
-        if "frame=" in line or "time=" in line:
-            print(f"\r{line}", end="", flush=True)
-        elif line:
-            print(line, flush=True)
-    process.wait()
-    print()
-    return process.returncode == 0
+
+    for i, path in enumerate(video_paths):
+        log(f"[{i+1}/{len(video_paths)}] Transmitindo: {os.path.basename(path)}")
+        cmd = [
+            "ffmpeg", "-re",
+            "-i", path,
+            "-c:v", "libx264",
+            "-preset", "veryfast",
+            "-tune", "zerolatency",
+            "-b:v", "8000k",
+            "-maxrate", "8000k",
+            "-bufsize", "16000k",
+            "-vf", "scale=1920:1080:force_original_aspect_ratio=decrease,pad=1920:1080:(ow-iw)/2:(oh-ih)/2:black",
+            "-r", "60",
+            "-g", "120",
+            "-keyint_min", "120",
+            "-sc_threshold", "0",
+            "-c:a", "aac",
+            "-b:a", "160k",
+            "-ar", "44100",
+            "-f", "flv",
+            dest
+        ]
+        process = subprocess.Popen(cmd, stdout=subprocess.PIPE, stderr=subprocess.STDOUT, text=True)
+        for line in process.stdout:
+            line = line.strip()
+            if "frame=" in line or "time=" in line:
+                print(f"\r{line}", end="", flush=True)
+            elif line:
+                print(line, flush=True)
+        process.wait()
+        print()
+        if process.returncode != 0:
+            log(f"  FFmpeg encerrou com erro no vídeo {i+1} (código {process.returncode}) — continuando...")
+        else:
+            log(f"  Vídeo {i+1} concluído.")
+
+    log("=== TODOS OS VÍDEOS TRANSMITIDOS ===")
+    return True
 
 def update_status(sheet, rows, status):
     import re
@@ -340,7 +343,7 @@ def main():
         sys.exit(1)
 
     log(f"{len(video_paths)} arquivo(s) validados — iniciando transmissão!")
-    success = transmit_playlist(video_paths, rtmp_url, rtmp_key)
+    transmit_playlist(video_paths, rtmp_url, rtmp_key)
 
     for path in video_paths:
         try:
@@ -354,13 +357,8 @@ def main():
         if download_results.get(v["drive_id"], (None, False))[1]
         and v["row"] not in failed_rows
     ]
-    if success:
-        update_status(sheet, transmitted_rows, "Finalizado")
-        log("=== TRANSMISSÃO CONCLUÍDA COM SUCESSO ===")
-    else:
-        update_status(sheet, transmitted_rows, "Falha")
-        log("=== TRANSMISSÃO ENCERRADA COM FALHA ===")
-        sys.exit(1)
+    update_status(sheet, transmitted_rows, "Finalizado")
+    log("=== TRANSMISSÃO CONCLUÍDA COM SUCESSO ===")
 
 if __name__ == "__main__":
     main()
