@@ -2,13 +2,18 @@ name: Transmissão Automática de TV/Rádio (VOD-to-Live)
 
 on:
   schedule:
-    - cron: '*/15 * * * *'
+    - cron: '*/5 * * * *'
   workflow_dispatch:
+
+concurrency:
+  group: transmissao-empire-tv
+  cancel-in-progress: false
 
 jobs:
   transmitir:
     name: Processar Transmissão Pendente com FFmpeg
     runs-on: ubuntu-latest
+    timeout-minutes: 360
 
     steps:
       - name: Baixar Código Fonte do Repositório
