@@ -2,7 +2,6 @@ import os
 import sys
 import json
 import subprocess
-import threading
 from datetime import datetime
 import pytz
 import gspread
@@ -51,9 +50,9 @@ def get_pending_videos(sheet):
             duracao = int(str(r.get("Duracao_Seg") or r.get("Duracao_Segundos") or "0").strip())
         except ValueError:
             duracao = 0
-        data_str   = str(r.get("Data", "")).strip()
-        horario    = str(r.get("Horario", "")).strip()
-        programa   = str(r.get("Programa", "Empire TV")).strip()
+        data_str = str(r.get("Data", "")).strip()
+        horario  = str(r.get("Horario", "")).strip()
+        programa = str(r.get("Programa", "Empire TV")).strip()
         if not drive_id or duracao <= 0:
             log(f"Linha {idx+2} ignorada: Drive_ID ou Duracao_Seg ausente/inválido.")
             continue
@@ -76,12 +75,9 @@ def get_pending_videos(sheet):
 def parse_datetime(data_str, horario_str, now):
     combined = f"{data_str} {horario_str}".strip() if data_str else horario_str.strip()
     fmts = [
-        "%d/%m/%Y %H:%M",
-        "%d/%m/%Y %H:%M:%S",
-        "%Y-%m-%d %H:%M",
-        "%Y-%m-%d %H:%M:%S",
-        "%H:%M:%S",
-        "%H:%M",
+        "%d/%m/%Y %H:%M", "%d/%m/%Y %H:%M:%S",
+        "%Y-%m-%d %H:%M", "%Y-%m-%d %H:%M:%S",
+        "%H:%M:%S", "%H:%M",
     ]
     for fmt in fmts:
         try:
@@ -106,77 +102,39 @@ def extract_drive_id(val):
         return val
     return ""
 
-def validate_video(path):
-    try:
-        result = subprocess.run(
-            [
-                "ffprobe", "-v", "error",
-                "-select_streams", "v:0",
-                "-show_entries", "stream=codec_type",
-                "-of", "json", path
-            ],
-            capture_output=True, text=True, timeout=30
-        )
-        if result.returncode != 0:
-            log(f"  ffprobe falhou em {os.path.basename(path)}: {result.stderr[:100]}")
-            return False
-        data = json.loads(result.stdout)
-        streams = data.get("streams", [])
-        if not streams:
-            log(f"  {os.path.basename(path)}: sem stream de vídeo — inválido")
-            return False
-        log(f"  {os.path.basename(path)}: OK ✓")
-        return True
-    except Exception as e:
-        log(f"  ffprobe erro: {e}")
-        return False
-
 def download_video(drive_id, output_path):
     MIN_BYTES = 5 * 1024 * 1024
-
+    if os.path.exists(output_path) and os.path.getsize(output_path) > MIN_BYTES:
+        log(f"  Já em cache: {os.path.getsize(output_path)/1024/1024:.1f} MB")
+        return True
     if os.path.exists(output_path):
-        size = os.path.getsize(output_path)
-        if size > MIN_BYTES:
-            log(f"Já em cache: {output_path} ({size/1024/1024:.1f} MB)")
-            return True
         os.remove(output_path)
 
-    log(f"Baixando ID: {drive_id} → {output_path}")
     url = f"https://drive.google.com/file/d/{drive_id}/view"
-
     try:
         result = subprocess.run(
             ["yt-dlp", "--no-playlist", "-o", output_path, url],
             capture_output=True, text=True, timeout=600
         )
         if result.returncode == 0 and os.path.exists(output_path) and os.path.getsize(output_path) > MIN_BYTES:
-            log(f"Download OK via yt-dlp: {os.path.getsize(output_path)/1024/1024:.1f} MB")
+            log(f"  Download OK: {os.path.getsize(output_path)/1024/1024:.1f} MB")
             return True
-        log(f"yt-dlp falhou (código {result.returncode}): {result.stderr[-200:]}")
+        log(f"  yt-dlp falhou ({result.returncode}): {result.stderr[-150:]}")
     except Exception as e:
-        log(f"yt-dlp erro: {e}")
+        log(f"  yt-dlp erro: {e}")
 
     try:
         session = requests.Session()
-        session.headers.update({
-            "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/124.0.0.0 Safari/537.36"
-        })
+        session.headers.update({"User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 Chrome/124.0.0.0 Safari/537.36"})
         dl_url = f"https://drive.google.com/uc?export=download&id={drive_id}"
         resp = session.get(dl_url, stream=True, timeout=30)
-        content_type = resp.headers.get("Content-Type", "")
-        if "text/html" in content_type:
+        if "text/html" in resp.headers.get("Content-Type", ""):
             import re
             html = resp.text
-            token = ""
-            m = re.search(r'name="uuid"\s+value="([^"]+)"', html)
-            if m:
-                token = m.group(1)
-            else:
-                m = re.search(r'confirm=([0-9A-Za-z_\-]+)', html)
-                if m:
-                    token = m.group(1)
-            confirm_param = f"&uuid={token}" if token and len(token) > 10 else ""
-            dl_url = f"https://drive.google.com/uc?export=download&id={drive_id}&confirm=t{confirm_param}"
+            m = re.search(r'name="uuid"\s+value="([^"]+)"', html) or re.search(r'confirm=([0-9A-Za-z_\-]+)', html)
+            token = m.group(1) if m else ""
+            extra = f"&uuid={token}" if token and len(token) > 10 else ""
+            dl_url = f"https://drive.google.com/uc?export=download&id={drive_id}&confirm=t{extra}"
             resp = session.get(dl_url, stream=True, timeout=60)
         total = 0
         with open(output_path, "wb") as f:
@@ -185,39 +143,65 @@ def download_video(drive_id, output_path):
                     f.write(chunk)
                     total += len(chunk)
         if total > MIN_BYTES:
-            log(f"Download OK via requests: {total/1024/1024:.1f} MB")
+            log(f"  Download OK (requests): {total/1024/1024:.1f} MB")
             return True
-        log(f"requests: arquivo muito pequeno ({total} bytes).")
+        log(f"  requests: arquivo pequeno ({total} bytes).")
         if os.path.exists(output_path):
             os.remove(output_path)
     except Exception as e:
-        log(f"requests erro: {e}")
+        log(f"  requests erro: {e}")
         if os.path.exists(output_path):
             os.remove(output_path)
 
-    log(f"FALHA TOTAL no download do ID: {drive_id}")
     return False
 
-def download_all_parallel(videos):
-    results = {}
-    threads = []
-    def worker(v):
-        path = f"/tmp/video_{v['drive_id']}.mp4"
-        results[v["drive_id"]] = (path, download_video(v["drive_id"], path))
-    for v in videos:
-        t = threading.Thread(target=worker, args=(v,))
-        threads.append(t)
-        t.start()
-    for t in threads:
-        t.join()
-    return results
+def normalize_video(input_path, output_path):
+    """
+    Recodifica o vídeo zerando timestamps do início.
+    Isso elimina o DTS out of order no concat do ffmpeg.
+    """
+    cmd = [
+        "ffmpeg", "-y",
+        "-i", input_path,
+        "-c:v", "libx264", "-preset", "ultrafast", "-crf", "18",
+        "-c:a", "aac", "-b:a", "160k", "-ar", "44100",
+        "-vf", "scale=1920:1080:force_original_aspect_ratio=decrease,pad=1920:1080:(ow-iw)/2:(oh-ih)/2:black",
+        "-r", "30",
+        "-g", "60",
+        "-keyint_min", "60",
+        "-sc_threshold", "0",
+        "-video_track_timescale", "90000",
+        "-avoid_negative_ts", "make_zero",
+        "-fflags", "+genpts",
+        output_path
+    ]
+    result = subprocess.run(cmd, capture_output=True, text=True, timeout=600)
+    if result.returncode == 0 and os.path.exists(output_path) and os.path.getsize(output_path) > 1024:
+        log(f"  Normalizado: {os.path.getsize(output_path)/1024/1024:.1f} MB")
+        return True
+    log(f"  Normalização falhou: {result.stderr[-200:]}")
+    return False
+
+def validate_video(path):
+    try:
+        result = subprocess.run(
+            ["ffprobe", "-v", "error", "-select_streams", "v:0",
+             "-show_entries", "stream=codec_type", "-of", "json", path],
+            capture_output=True, text=True, timeout=30
+        )
+        if result.returncode != 0:
+            return False
+        data = json.loads(result.stdout)
+        return len(data.get("streams", [])) > 0
+    except Exception:
+        return False
 
 def transmit_playlist(video_paths, rtmp_url, rtmp_key):
-    """
-    Transmite cada vídeo individualmente em sequência.
-    Isso evita completamente o problema de DTS out of order
-    que ocorre com ffmpeg concat quando vídeos têm timestamps diferentes.
-    """
+    list_path = "/tmp/ffmpeg_playlist.txt"
+    with open(list_path, "w") as f:
+        for p in video_paths:
+            f.write(f"file '{p}'\n")
+
     raw_url = rtmp_url.rstrip("/")
     if raw_url.startswith("rtmps://"):
         host_path = raw_url.replace("rtmps://", "")
@@ -225,47 +209,39 @@ def transmit_playlist(video_paths, rtmp_url, rtmp_key):
     else:
         dest = f"{raw_url}/app/{rtmp_key}"
 
-    log(f"Transmitindo {len(video_paths)} vídeo(s) em sequência...")
     log(f"Destino RTMP: {raw_url}/app/<chave_oculta>")
+    log(f"Iniciando FFmpeg — {len(video_paths)} vídeo(s) em sequência contínua...")
 
-    for i, path in enumerate(video_paths):
-        log(f"[{i+1}/{len(video_paths)}] Transmitindo: {os.path.basename(path)}")
-        cmd = [
-            "ffmpeg", "-re",
-            "-i", path,
-            "-c:v", "libx264",
-            "-preset", "veryfast",
-            "-tune", "zerolatency",
-            "-b:v", "8000k",
-            "-maxrate", "8000k",
-            "-bufsize", "16000k",
-            "-vf", "scale=1920:1080:force_original_aspect_ratio=decrease,pad=1920:1080:(ow-iw)/2:(oh-ih)/2:black",
-            "-r", "60",
-            "-g", "120",
-            "-keyint_min", "120",
-            "-sc_threshold", "0",
-            "-c:a", "aac",
-            "-b:a", "160k",
-            "-ar", "44100",
-            "-f", "flv",
-            dest
-        ]
-        process = subprocess.Popen(cmd, stdout=subprocess.PIPE, stderr=subprocess.STDOUT, text=True)
-        for line in process.stdout:
-            line = line.strip()
-            if "frame=" in line or "time=" in line:
-                print(f"\r{line}", end="", flush=True)
-            elif line:
-                print(line, flush=True)
-        process.wait()
-        print()
-        if process.returncode != 0:
-            log(f"  FFmpeg encerrou com erro no vídeo {i+1} (código {process.returncode}) — continuando...")
-        else:
-            log(f"  Vídeo {i+1} concluído.")
-
-    log("=== TODOS OS VÍDEOS TRANSMITIDOS ===")
-    return True
+    cmd = [
+        "ffmpeg", "-re",
+        "-f", "concat", "-safe", "0",
+        "-i", list_path,
+        "-c:v", "libx264",
+        "-preset", "veryfast",
+        "-tune", "zerolatency",
+        "-b:v", "8000k",
+        "-maxrate", "8000k",
+        "-bufsize", "16000k",
+        "-r", "60",
+        "-g", "120",
+        "-keyint_min", "120",
+        "-sc_threshold", "0",
+        "-c:a", "aac",
+        "-b:a", "160k",
+        "-ar", "44100",
+        "-f", "flv",
+        dest
+    ]
+    process = subprocess.Popen(cmd, stdout=subprocess.PIPE, stderr=subprocess.STDOUT, text=True)
+    for line in process.stdout:
+        line = line.strip()
+        if "frame=" in line or "time=" in line:
+            print(f"\r{line}", end="", flush=True)
+        elif line:
+            print(line, flush=True)
+    process.wait()
+    print()
+    return process.returncode == 0
 
 def update_status(sheet, rows, status):
     import re
@@ -288,7 +264,6 @@ def main():
     spreadsheet_id = os.environ.get("SPREADSHEET_ID")
     rtmp_url = os.environ.get("RTMP_URL")
     rtmp_key = os.environ.get("RTMP_KEY")
-    log(f"RTMP_URL recebida: '{rtmp_url}'")
     log(f"RTMP_KEY (primeiros 15 chars): '{str(rtmp_key)[:15]}...'")
     log(f"SPREADSHEET_ID (primeiros 10 chars): '{str(spreadsheet_id)[:10]}...'")
     if not all([spreadsheet_id, rtmp_url, rtmp_key]):
@@ -304,61 +279,84 @@ def main():
         sheet = spreadsheet.worksheet("Programacao_RPG")
     except Exception:
         sheet = spreadsheet.get_worksheet(0)
+
     videos = get_pending_videos(sheet)
     if not videos:
         log("Nenhuma transmissão pendente para agora. Encerrando.")
         sys.exit(0)
+
     log(f"{len(videos)} vídeo(s) encontrado(s) para transmissão:")
-    for v in videos:
-        log(f"  [{v['horario']}] {v['programa']} — ID: {v['drive_id']} ({v['duracao']}s)")
+    for i, v in enumerate(videos):
+        log(f"  [{i+1}] {v['programa']} — ID: {v['drive_id']} ({v['duracao']}s) [{v['horario']}]")
 
     update_status(sheet, [v["row"] for v in videos], "Transmitindo")
 
-    log("Iniciando downloads paralelos...")
-    download_results = download_all_parallel(videos)
-
-    log("Validando arquivos com ffprobe...")
+    # ── FASE 1: Download + normalização em ordem estrita ──────────────────────
+    log("=== FASE 1: Preparando vídeos em ordem ===")
     video_paths = []
     failed_rows = []
-    for v in videos:
-        path, success = download_results.get(v["drive_id"], (None, False))
-        if not success:
-            log(f"FALHA no download: {v['programa']} (ID: {v['drive_id']})")
+
+    for i, v in enumerate(videos):
+        raw_path  = f"/tmp/raw_{v['drive_id']}.mp4"
+        norm_path = f"/tmp/norm_{i:03d}_{v['drive_id']}.mp4"
+
+        log(f"[{i+1}/{len(videos)}] Baixando: {v['programa']} ({v['drive_id']})")
+        if not download_video(v["drive_id"], raw_path):
+            log(f"  FALHA no download — vídeo {i+1} será pulado")
             failed_rows.append(v["row"])
             continue
-        if validate_video(path):
-            video_paths.append(path)
-        else:
-            log(f"INVÁLIDO: {v['programa']} (ID: {v['drive_id']}) — removido da playlist")
+
+        log(f"[{i+1}/{len(videos)}] Normalizando timestamps...")
+        if not normalize_video(raw_path, norm_path):
+            log(f"  FALHA na normalização — vídeo {i+1} será pulado")
             failed_rows.append(v["row"])
-            if os.path.exists(path):
-                os.remove(path)
+            if os.path.exists(raw_path):
+                os.remove(raw_path)
+            continue
+
+        if os.path.exists(raw_path):
+            os.remove(raw_path)
+
+        if validate_video(norm_path):
+            video_paths.append((norm_path, v["row"]))
+            log(f"  ✓ Vídeo {i+1} pronto")
+        else:
+            log(f"  Arquivo inválido após normalização — vídeo {i+1} será pulado")
+            failed_rows.append(v["row"])
+            if os.path.exists(norm_path):
+                os.remove(norm_path)
 
     if failed_rows:
         update_status(sheet, failed_rows, "Pendente")
 
     if not video_paths:
-        log("Nenhum vídeo válido para transmitir. Abortando.")
+        log("Nenhum vídeo pronto para transmitir. Abortando.")
         update_status(sheet, [v["row"] for v in videos], "Falha")
         sys.exit(1)
 
-    log(f"{len(video_paths)} arquivo(s) validados — iniciando transmissão!")
-    transmit_playlist(video_paths, rtmp_url, rtmp_key)
+    # ── FASE 2: Transmissão única e contínua ──────────────────────────────────
+    log(f"=== FASE 2: Transmitindo {len(video_paths)} vídeo(s) sem interrupção ===")
+    for i, (path, _) in enumerate(video_paths):
+        log(f"  [{i+1}] {os.path.basename(path)}")
 
-    for path in video_paths:
+    paths_only = [p for p, _ in video_paths]
+    success = transmit_playlist(paths_only, rtmp_url, rtmp_key)
+
+    for path, _ in video_paths:
         try:
             if os.path.exists(path):
                 os.remove(path)
         except Exception:
             pass
 
-    transmitted_rows = [
-        v["row"] for v in videos
-        if download_results.get(v["drive_id"], (None, False))[1]
-        and v["row"] not in failed_rows
-    ]
-    update_status(sheet, transmitted_rows, "Finalizado")
-    log("=== TRANSMISSÃO CONCLUÍDA COM SUCESSO ===")
+    transmitted_rows = [row for _, row in video_paths]
+    if success:
+        update_status(sheet, transmitted_rows, "Finalizado")
+        log("=== TRANSMISSÃO CONCLUÍDA COM SUCESSO ===")
+    else:
+        update_status(sheet, transmitted_rows, "Falha")
+        log("=== TRANSMISSÃO ENCERRADA COM FALHA ===")
+        sys.exit(1)
 
 if __name__ == "__main__":
     main()
