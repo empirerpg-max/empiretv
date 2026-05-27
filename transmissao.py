@@ -106,13 +106,37 @@ def extract_drive_id(val):
         return val
     return ""
 
+def validate_video(path):
+    """
+    Usa ffprobe para verificar se o arquivo é um vídeo válido e legível.
+    Retorna True apenas se tiver stream de vídeo detectado.
+    """
+    try:
+        result = subprocess.run(
+            [
+                "ffprobe", "-v", "error",
+                "-select_streams", "v:0",
+                "-show_entries", "stream=codec_type",
+                "-of", "json", path
+            ],
+            capture_output=True, text=True, timeout=30
+        )
+        if result.returncode != 0:
+            log(f"  ffprobe falhou em {os.path.basename(path)}: {result.stderr[:100]}")
+            return False
+        data = json.loads(result.stdout)
+        streams = data.get("streams", [])
+        if not streams:
+            log(f"  {os.path.basename(path)}: sem stream de vídeo — arquivo inválido")
+            return False
+        log(f"  {os.path.basename(path)}: OK ✓")
+        return True
+    except Exception as e:
+        log(f"  ffprobe erro: {e}")
+        return False
+
 def download_video(drive_id, output_path):
-    """
-    Baixa vídeo do Google Drive.
-    Tenta yt-dlp primeiro (mais confiável para arquivos grandes),
-    com fallback para requests.
-    """
-    MIN_BYTES = 5 * 1024 * 1024  # 5 MB mínimo
+    MIN_BYTES = 5 * 1024 * 1024
 
     if os.path.exists(output_path):
         size = os.path.getsize(output_path)
@@ -124,7 +148,6 @@ def download_video(drive_id, output_path):
     log(f"Baixando ID: {drive_id} → {output_path}")
     url = f"https://drive.google.com/file/d/{drive_id}/view"
 
-    # Método 1: yt-dlp
     try:
         result = subprocess.run(
             ["yt-dlp", "--no-playlist", "-o", output_path, url],
@@ -137,7 +160,6 @@ def download_video(drive_id, output_path):
     except Exception as e:
         log(f"yt-dlp erro: {e}")
 
-    # Método 2: requests com cookies e User-Agent de navegador
     try:
         session = requests.Session()
         session.headers.update({
@@ -159,7 +181,6 @@ def download_video(drive_id, output_path):
                     token = m.group(1)
             confirm_param = f"&uuid={token}" if token and len(token) > 10 else ""
             dl_url = f"https://drive.google.com/uc?export=download&id={drive_id}&confirm=t{confirm_param}"
-            log(f"  Refazendo com token: '{token[:20] if token else 't'}'")
             resp = session.get(dl_url, stream=True, timeout=60)
         total = 0
         with open(output_path, "wb") as f:
@@ -170,7 +191,7 @@ def download_video(drive_id, output_path):
         if total > MIN_BYTES:
             log(f"Download OK via requests: {total/1024/1024:.1f} MB")
             return True
-        log(f"requests: arquivo muito pequeno ({total} bytes) — Drive bloqueou.")
+        log(f"requests: arquivo muito pequeno ({total} bytes).")
         if os.path.exists(output_path):
             os.remove(output_path)
     except Exception as e:
@@ -287,34 +308,51 @@ def main():
     log(f"{len(videos)} vídeo(s) encontrado(s) para transmissão:")
     for v in videos:
         log(f"  [{v['horario']}] {v['programa']} — ID: {v['drive_id']} ({v['duracao']}s)")
+
     update_status(sheet, [v["row"] for v in videos], "Transmitindo")
+
     log("Iniciando downloads paralelos...")
     download_results = download_all_parallel(videos)
+
+    log("Validando arquivos com ffprobe...")
     video_paths = []
     failed_rows = []
     for v in videos:
         path, success = download_results.get(v["drive_id"], (None, False))
-        if success:
-            video_paths.append(path)
-        else:
+        if not success:
             log(f"FALHA no download: {v['programa']} (ID: {v['drive_id']})")
             failed_rows.append(v["row"])
+            continue
+        if validate_video(path):
+            video_paths.append(path)
+        else:
+            log(f"INVÁLIDO: {v['programa']} (ID: {v['drive_id']}) — removido da playlist")
+            failed_rows.append(v["row"])
+            if os.path.exists(path):
+                os.remove(path)
+
     if failed_rows:
         update_status(sheet, failed_rows, "Pendente")
+
     if not video_paths:
-        log("Nenhum vídeo disponível para transmitir. Abortando.")
+        log("Nenhum vídeo válido para transmitir. Abortando.")
         update_status(sheet, [v["row"] for v in videos], "Falha")
         sys.exit(1)
+
+    log(f"{len(video_paths)} arquivo(s) validados — iniciando transmissão!")
     success = transmit_playlist(video_paths, rtmp_url, rtmp_key)
+
     for path in video_paths:
         try:
             if os.path.exists(path):
                 os.remove(path)
         except Exception:
             pass
+
     transmitted_rows = [
         v["row"] for v in videos
         if download_results.get(v["drive_id"], (None, False))[1]
+        and v["row"] not in failed_rows
     ]
     if success:
         update_status(sheet, transmitted_rows, "Finalizado")
