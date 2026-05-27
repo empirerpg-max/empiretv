@@ -156,10 +156,6 @@ def download_video(drive_id, output_path):
     return False
 
 def normalize_video(input_path, output_path):
-    """
-    Recodifica o vídeo zerando timestamps do início.
-    Isso elimina o DTS out of order no concat do ffmpeg.
-    """
     cmd = [
         "ffmpeg", "-y",
         "-i", input_path,
@@ -213,9 +209,11 @@ def transmit_playlist(video_paths, rtmp_url, rtmp_key):
     log(f"Iniciando FFmpeg — {len(video_paths)} vídeo(s) em sequência contínua...")
 
     cmd = [
-        "ffmpeg", "-re",
+        "ffmpeg",
+        "-re",
         "-f", "concat", "-safe", "0",
         "-i", list_path,
+        # Encoding
         "-c:v", "libx264",
         "-preset", "veryfast",
         "-tune", "zerolatency",
@@ -229,7 +227,14 @@ def transmit_playlist(video_paths, rtmp_url, rtmp_key):
         "-c:a", "aac",
         "-b:a", "160k",
         "-ar", "44100",
+        # Output com reconnect e timeout para RTMPS estavel
         "-f", "flv",
+        "-rtmp_live", "live",
+        "-timeout", "30000000",
+        "-reconnect", "1",
+        "-reconnect_at_eof", "0",
+        "-reconnect_streamed", "1",
+        "-reconnect_delay_max", "5",
         dest
     ]
     process = subprocess.Popen(cmd, stdout=subprocess.PIPE, stderr=subprocess.STDOUT, text=True)
@@ -291,7 +296,7 @@ def main():
 
     update_status(sheet, [v["row"] for v in videos], "Transmitindo")
 
-    # ── FASE 1: Download + normalização em ordem estrita ──────────────────────
+    # FASE 1: Download + normalização em ordem estrita
     log("=== FASE 1: Preparando vídeos em ordem ===")
     video_paths = []
     failed_rows = []
@@ -321,7 +326,7 @@ def main():
             video_paths.append((norm_path, v["row"]))
             log(f"  ✓ Vídeo {i+1} pronto")
         else:
-            log(f"  Arquivo inválido após normalização — vídeo {i+1} será pulado")
+            log(f"  Arquivo inválido — vídeo {i+1} pulado")
             failed_rows.append(v["row"])
             if os.path.exists(norm_path):
                 os.remove(norm_path)
@@ -334,7 +339,7 @@ def main():
         update_status(sheet, [v["row"] for v in videos], "Falha")
         sys.exit(1)
 
-    # ── FASE 2: Transmissão única e contínua ──────────────────────────────────
+    # FASE 2: Transmissão única e contínua
     log(f"=== FASE 2: Transmitindo {len(video_paths)} vídeo(s) sem interrupção ===")
     for i, (path, _) in enumerate(video_paths):
         log(f"  [{i+1}] {os.path.basename(path)}")
