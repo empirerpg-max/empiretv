@@ -1,3 +1,4 @@
+import { motion } from "motion/react";
 import type { Tab } from "../App";
 
 const ICONS: Record<Tab, string> = {
@@ -25,9 +26,21 @@ export default function NavBar({ current, onNavigate }: { current: Tab; onNaviga
           className={`nav-btn ${current === t ? "active" : ""}`}
           onClick={() => onNavigate(t)}
         >
-          <span className="nav-icon">
+          {/* Pill roxa animada com layoutId */}
+          {current === t && (
+            <motion.span
+              layoutId="nav-active-pill"
+              className="nav-active-pill"
+              transition={{ type: "spring", stiffness: 380, damping: 30 }}
+            />
+          )}
+          <motion.span
+            className="nav-icon"
+            animate={{ scale: current === t ? 1.15 : 1 }}
+            transition={{ type: "spring", stiffness: 400, damping: 22 }}
+          >
             <img src={ICONS[t]} alt={LABELS[t]} />
-          </span>
+          </motion.span>
           <span className="nav-label">{LABELS[t]}</span>
         </button>
       ))}
