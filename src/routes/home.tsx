@@ -1,35 +1,33 @@
 import { useEffect, useState } from "react";
-import { motion } from "motion/react";
+import { motion, AnimatePresence } from "motion/react";
 import type { Tab } from "../App";
 import { fetchGAS } from "../lib/gas";
 
 const BACKEND = "https://empiretv-chat-backend.onrender.com";
-const LOGO = "https://i.imgur.com/6cL3Ca9.png";
+const LOGO    = "https://i.imgur.com/6cL3Ca9.png";
+const BANNER_FALLBACK = "https://i.imgur.com/4e5Yc2M.png";
 
 interface Programa {
   programa: string; tipo: string; material?: string;
   buff?: string; horarioStr?: string; data?: string;
-  capaUrl?: string; status?: string;
+  capaUrl?: string; status?: string; inicio?: number; fim?: number;
 }
 interface ArchiveItem {
   roomId: string; programa: string; tipo: string;
   data: string; horario: string; capaUrl: string; totalMsgs: number;
 }
 
-const cardVariants = {
-  hidden: { opacity: 0, y: 24, scale: 0.96 },
-  show:   { opacity: 1, y: 0,  scale: 1 },
-};
-const listVariants = {
-  hidden: {},
-  show:   { transition: { staggerChildren: 0.06 } },
-};
+function SecondsToday() {
+  const now = new Date();
+  return now.getHours() * 3600 + now.getMinutes() * 60 + now.getSeconds();
+}
 
 export default function Home({ onNavigate }: { onNavigate: (t: Tab) => void }) {
   const [current,  setCurrent]  = useState<Programa | null>(null);
   const [schedule, setSchedule] = useState<Programa[]>([]);
   const [archive,  setArchive]  = useState<ArchiveItem[]>([]);
   const [loading,  setLoading]  = useState(true);
+  const [heroIdx,  setHeroIdx]  = useState(0);
 
   useEffect(() => {
     (async () => {
@@ -45,132 +43,208 @@ export default function Home({ onNavigate }: { onNavigate: (t: Tab) => void }) {
     })();
   }, []);
 
-  const hero = current?.capaUrl ? current : schedule.find(p => p.capaUrl) || null;
+  // Hero rotativo: prioriza ao vivo, depois próximos com capa
+  const heroItems = [
+    ...(current ? [current] : []),
+    ...schedule.filter(p => p.capaUrl && p !== current),
+  ].slice(0, 5);
+
+  useEffect(() => {
+    if (heroItems.length <= 1) return;
+    const t = setInterval(() => setHeroIdx(i => (i + 1) % heroItems.length), 6000);
+    return () => clearInterval(t);
+  }, [heroItems.length]);
+
+  const hero   = heroItems[heroIdx] || null;
   const isLive = current?.status === "broadcasting";
+
+  // Próximos: excluindo o que está no hero
+  const proximos = schedule.filter((_, i) => i < 10);
 
   return (
     <div className="home-page">
+      {/* ── Header ── */}
       <header className="nf-header">
         <div className="nf-logo"><img src={LOGO} alt="Empire TV" /></div>
         <nav className="nf-nav">
           <button className="nf-nav-link active" onClick={() => onNavigate("home")}>Início</button>
           <button className="nf-nav-link" onClick={() => onNavigate("ao-vivo")}>Ao Vivo</button>
           <button className="nf-nav-link" onClick={() => onNavigate("grade")}>Grade</button>
-          <button className="nf-nav-link" onClick={() => onNavigate("arquivo")}>Arquivo</button>
         </nav>
       </header>
 
-      {loading && <div className="nf-loading">Carregando…</div>}
+      {loading && (
+        <div className="home-loading">
+          <div className="home-spinner" />
+          <span>Carregando programação…</span>
+        </div>
+      )}
 
-      {!loading && hero && (
-        <motion.div
-          className="nf-hero"
-          style={{ backgroundImage: hero.capaUrl ? `url(${hero.capaUrl})` : undefined }}
-          initial={{ opacity: 0, scale: 1.03 }}
-          animate={{ opacity: 1, scale: 1 }}
-          transition={{ duration: 0.55, ease: [0.4, 0, 0.2, 1] }}
-        >
-          <div className="nf-hero-gradient" />
-          <div className="nf-hero-orb" />
-          <motion.div
-            className="nf-hero-content"
-            initial={{ opacity: 0, y: 28 }}
-            animate={{ opacity: 1, y: 0 }}
-            transition={{ duration: 0.5, delay: 0.18, ease: [0.4, 0, 0.2, 1] }}
-          >
-            {isLive && <span className="nf-live-badge">◉ ao vivo</span>}
-            {hero.tipo && <span className="nf-hero-eyebrow">{hero.tipo}</span>}
-            <h1 className="nf-hero-title">{hero.programa}</h1>
-            {hero.material && <p className="nf-hero-desc">{hero.material}</p>}
-            <div className="nf-hero-actions">
-              <motion.button
-                className="nf-btn-play"
+      {!loading && (
+        <>
+          {/* ── Hero Banner ── */}
+          <div className="nf-hero">
+            <AnimatePresence mode="wait">
+              <motion.div
+                key={heroIdx}
+                className="nf-hero-bg"
+                style={{ backgroundImage: `url(${hero?.capaUrl || BANNER_FALLBACK})` }}
+                initial={{ opacity: 0, scale: 1.04 }}
+                animate={{ opacity: 1, scale: 1 }}
+                exit={{ opacity: 0 }}
+                transition={{ duration: 0.6, ease: [0.4, 0, 0.2, 1] }}
+              />
+            </AnimatePresence>
+            <div className="nf-hero-gradient" />
+            <div className="nf-hero-orb" />
+
+            <motion.div
+              className="nf-hero-content"
+              key={`content-${heroIdx}`}
+              initial={{ opacity: 0, y: 28 }}
+              animate={{ opacity: 1, y: 0 }}
+              transition={{ duration: 0.45, delay: 0.15 }}
+            >
+              {isLive && hero === current && (
+                <span className="nf-live-badge">◉ ao vivo agora</span>
+              )}
+              {hero?.tipo && <span className="nf-hero-eyebrow">{hero.tipo}</span>}
+              <h1 className="nf-hero-title">{hero?.programa || "Empire TV"}</h1>
+              {hero?.material && <p className="nf-hero-desc">{hero.material}</p>}
+              {!hero && <p className="nf-hero-desc">Sua central de entretenimento RPG ao vivo.</p>}
+              <div className="nf-hero-actions">
+                <motion.button
+                  className="nf-btn-play"
+                  onClick={() => onNavigate(isLive && hero === current ? "ao-vivo" : "grade")}
+                  whileHover={{ scale: 1.05 }} whileTap={{ scale: 0.95 }}
+                >
+                  ▶ {isLive && hero === current ? "Assistir Ao Vivo" : "Ver Grade"}
+                </motion.button>
+                {hero?.buff && (
+                  <motion.button
+                    className="nf-btn-info"
+                    whileHover={{ scale: 1.04 }} whileTap={{ scale: 0.96 }}
+                  >
+                    🎮 {hero.buff}
+                  </motion.button>
+                )}
+              </div>
+            </motion.div>
+
+            {/* Dots do hero rotativo */}
+            {heroItems.length > 1 && (
+              <div className="nf-hero-dots">
+                {heroItems.map((_, i) => (
+                  <button
+                    key={i}
+                    className={`nf-hero-dot ${i === heroIdx ? "active" : ""}`}
+                    onClick={() => setHeroIdx(i)}
+                  />
+                ))}
+              </div>
+            )}
+          </div>
+
+          {/* ── Ao Vivo agora ── */}
+          {isLive && current && (
+            <section className="nf-section">
+              <div className="nf-section-header">
+                <span className="nf-pulse-dot" />
+                <h2 className="nf-section-title">Ao Vivo Agora</h2>
+              </div>
+              <motion.div
+                className="nf-live-card"
                 onClick={() => onNavigate("ao-vivo")}
-                whileHover={{ scale: 1.05 }}
-                whileTap={{ scale: 0.95 }}
+                whileHover={{ scale: 1.015 }} whileTap={{ scale: 0.98 }}
+                initial={{ opacity: 0, y: 16 }} animate={{ opacity: 1, y: 0 }}
               >
-                <span>▶</span> {isLive ? "Assistir Ao Vivo" : "Ver Grade"}
-              </motion.button>
-              <motion.button
-                className="nf-btn-info"
-                onClick={() => onNavigate("grade")}
-                whileHover={{ scale: 1.04 }}
-                whileTap={{ scale: 0.96 }}
-              >
-                <span>i</span> Saiba mais
-              </motion.button>
+                {current.capaUrl
+                  ? <img src={current.capaUrl} alt={current.programa} className="nf-live-card-img" />
+                  : <div className="nf-live-card-placeholder">📺</div>}
+                <div className="nf-live-card-overlay">
+                  <span className="nf-live-card-badge">◉ AO VIVO</span>
+                  <span className="nf-live-card-title">{current.programa}</span>
+                  {current.tipo && <span className="nf-live-card-tipo">{current.tipo}</span>}
+                  <span className="nf-live-card-cta">Entrar →</span>
+                </div>
+              </motion.div>
+            </section>
+          )}
+
+          {/* ── Próximos ── */}
+          {proximos.length > 0 && (
+            <section className="nf-section">
+              <div className="nf-section-header">
+                <h2 className="nf-section-title">Próximos Programas</h2>
+                <button className="nf-section-link" onClick={() => onNavigate("grade")}>Ver todos →</button>
+              </div>
+              <div className="nf-carousel">
+                {proximos.map((p, i) => (
+                  <motion.div
+                    key={i} className="nf-card"
+                    initial={{ opacity: 0, y: 20 }}
+                    animate={{ opacity: 1, y: 0 }}
+                    transition={{ delay: i * 0.05, duration: 0.3 }}
+                    whileHover={{ y: -6, scale: 1.04, transition: { type: "spring", stiffness: 320, damping: 20 } }}
+                    whileTap={{ scale: 0.96 }}
+                    onClick={() => onNavigate("grade")}
+                  >
+                    {p.capaUrl
+                      ? <img src={p.capaUrl} alt={p.programa} className="nf-card-img" />
+                      : <div className="nf-card-placeholder">📺</div>}
+                    <div className="nf-card-info">
+                      <span className="nf-card-horario">{p.horarioStr || p.data || "—"}</span>
+                      <span className="nf-card-title">{p.programa}</span>
+                      {p.tipo && <span className="nf-card-tipo">{p.tipo}</span>}
+                    </div>
+                  </motion.div>
+                ))}
+              </div>
+            </section>
+          )}
+
+          {/* ── Transmissões Anteriores ── */}
+          {archive.length > 0 && (
+            <section className="nf-section">
+              <div className="nf-section-header">
+                <h2 className="nf-section-title">Transmissões Anteriores</h2>
+                <button className="nf-section-link" onClick={() => onNavigate("arquivo")}>Ver arquivo →</button>
+              </div>
+              <div className="nf-carousel">
+                {archive.map(item => (
+                  <motion.div
+                    key={item.roomId} className="nf-card"
+                    initial={{ opacity: 0, y: 20 }} animate={{ opacity: 1, y: 0 }}
+                    whileHover={{ y: -6, scale: 1.04, transition: { type: "spring", stiffness: 320, damping: 20 } }}
+                    whileTap={{ scale: 0.96 }}
+                    onClick={() => onNavigate("arquivo")}
+                  >
+                    {item.capaUrl
+                      ? <img src={item.capaUrl} alt={item.programa} className="nf-card-img" />
+                      : <div className="nf-card-placeholder">🎬</div>}
+                    <div className="nf-card-info">
+                      <span className="nf-card-horario">{item.data}</span>
+                      <span className="nf-card-title">{item.programa}</span>
+                      <span className="nf-card-msgs">💬 {item.totalMsgs} msgs</span>
+                    </div>
+                  </motion.div>
+                ))}
+              </div>
+            </section>
+          )}
+
+          {/* Estado vazio */}
+          {proximos.length === 0 && archive.length === 0 && (
+            <div className="home-empty">
+              <div className="home-empty-icon">📡</div>
+              <p className="home-empty-title">Nenhuma programação ainda</p>
+              <p className="home-empty-sub">Em breve novos conteúdos serão adicionados.</p>
             </div>
-          </motion.div>
-        </motion.div>
-      )}
-      {!loading && !hero && <div className="nf-empty">Nenhuma transmissão programada.</div>}
+          )}
 
-      {schedule.length > 0 && (
-        <section className="nf-section">
-          <h2 className="nf-section-title">Próximos Programas</h2>
-          <motion.div
-            className="nf-carousel"
-            variants={listVariants}
-            initial="hidden"
-            animate="show"
-          >
-            {schedule.map((p, i) => (
-              <motion.div
-                key={i}
-                className="nf-card"
-                variants={cardVariants}
-                transition={{ duration: 0.32, ease: [0.34, 1.2, 0.64, 1] }}
-                whileHover={{ y: -7, scale: 1.04, transition: { type: "spring", stiffness: 320, damping: 20 } }}
-                whileTap={{ scale: 0.96 }}
-                onClick={() => onNavigate("grade")}
-              >
-                {p.capaUrl
-                  ? <img src={p.capaUrl} alt={p.programa} className="nf-card-img" />
-                  : <div className="nf-card-placeholder">📺</div>}
-                <div className="nf-card-info">
-                  <span className="nf-card-horario">{p.horarioStr || p.data || ""}</span>
-                  <span className="nf-card-title">{p.programa}</span>
-                  {p.tipo && <span className="nf-card-tipo">{p.tipo}</span>}
-                </div>
-              </motion.div>
-            ))}
-          </motion.div>
-        </section>
+          <div style={{ height: 24 }} />
+        </>
       )}
-
-      {archive.length > 0 && (
-        <section className="nf-section">
-          <h2 className="nf-section-title">Transmissões Anteriores</h2>
-          <motion.div
-            className="nf-carousel"
-            variants={listVariants}
-            initial="hidden"
-            animate="show"
-          >
-            {archive.map(item => (
-              <motion.div
-                key={item.roomId}
-                className="nf-card"
-                variants={cardVariants}
-                transition={{ duration: 0.32, ease: [0.34, 1.2, 0.64, 1] }}
-                whileHover={{ y: -7, scale: 1.04, transition: { type: "spring", stiffness: 320, damping: 20 } }}
-                whileTap={{ scale: 0.96 }}
-                onClick={() => onNavigate("arquivo")}
-              >
-                {item.capaUrl
-                  ? <img src={item.capaUrl} alt={item.programa} className="nf-card-img" />
-                  : <div className="nf-card-placeholder">🎬</div>}
-                <div className="nf-card-info">
-                  <span className="nf-card-horario">{item.data}</span>
-                  <span className="nf-card-title">{item.programa}</span>
-                  <span className="nf-card-msgs">💬 {item.totalMsgs}</span>
-                </div>
-              </motion.div>
-            ))}
-          </motion.div>
-        </section>
-      )}
-      <div style={{ height: 20 }} />
     </div>
   );
 }
