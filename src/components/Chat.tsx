@@ -10,18 +10,27 @@ interface Msg {
   data: string;
 }
 
+// ── Armazenamento resiliente: tenta localStorage, cai em memória se bloqueado ──
+const memStore: Record<string, string> = {};
+function storeGet(key: string): string | null {
+  try { return localStorage.getItem(key); } catch { return memStore[key] ?? null; }
+}
+function storeSet(key: string, val: string) {
+  try { localStorage.setItem(key, val); } catch { memStore[key] = val; }
+}
+
 function genUid() {
-  let id = localStorage.getItem("etv_uid");
-  if (!id) { id = "u_" + Date.now().toString(36); localStorage.setItem("etv_uid", id); }
+  let id = storeGet("etv_uid");
+  if (!id) { id = "u_" + Date.now().toString(36); storeSet("etv_uid", id); }
   return id;
 }
-function getNome() { return localStorage.getItem("etv_nome") || "Espectador"; }
+function getNome() { return storeGet("etv_nome") || "Espectador"; }
 
 export default function Chat({ roomId, backendUrl }: { roomId: string; backendUrl: string }) {
   const [msgs,     setMsgs]     = useState<Msg[]>([]);
   const [texto,    setTexto]    = useState("");
   const [nome,     setNome]     = useState(getNome());
-  const [editNome, setEditNome] = useState(!localStorage.getItem("etv_nome"));
+  const [editNome, setEditNome] = useState(!storeGet("etv_nome"));
   const [online,   setOnline]   = useState(0);
   const [archived, setArchived] = useState(false);
   const [status,   setStatus]   = useState<"connecting"|"open"|"closed">("connecting");
@@ -56,7 +65,7 @@ export default function Chat({ roomId, backendUrl }: { roomId: string; backendUr
 
   const salvarNome = () => {
     const n = nome.trim() || "Espectador";
-    localStorage.setItem("etv_nome", n);
+    storeSet("etv_nome", n);
     setNome(n); setEditNome(false);
   };
 
