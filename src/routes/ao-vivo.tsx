@@ -13,6 +13,10 @@ const LOGO         = "https://i.imgur.com/6cL3Ca9.png";
 const KICK_CHANNEL = "empiretvoficial";
 const KICK_PLAYER  = `https://player.kick.com/${KICK_CHANNEL}?muted=false`;
 
+// Quantos polls consecutivos "off" são necessários antes de fechar a sala
+// (60 s por poll × 3 = 3 minutos de confirmação)
+const POLLS_TO_CLOSE = 3;
+
 interface Transmission {
   status: string; programa: string; tipo?: string;
   material?: string; buff?: string;
@@ -36,20 +40,21 @@ function fallbackRoomId(c: Transmission): string {
 }
 
 export default function AoVivo() {
-  const videoRef       = useRef<HTMLVideoElement>(null);
-  const canvasRef      = useRef<HTMLCanvasElement>(null);
-  const currentUrlRef  = useRef("");
-  const errorCountRef  = useRef(0);
-  const closedRooms    = useRef<Set<string>>(new Set());
-  // Guarda o roomId da última transmissão ativa para detectar quando ela encerra
-  const lastActiveRoom = useRef<{ roomId: string; programa: string } | null>(null);
+  const videoRef        = useRef<HTMLVideoElement>(null);
+  const canvasRef       = useRef<HTMLCanvasElement>(null);
+  const currentUrlRef   = useRef("");
+  const errorCountRef   = useRef(0);
+  const closedRooms     = useRef<Set<string>>(new Set());
+  const lastActiveRoom  = useRef<{ roomId: string; programa: string } | null>(null);
+  // Contador de polls consecutivos com status inativo — só fecha após POLLS_TO_CLOSE
+  const inactivePollCount = useRef(0);
 
-  const [current,    setCurrent]    = useState<Transmission | null>(null);
-  const [loading,    setLoading]    = useState(true);
-  const [muted,      setMuted]      = useState(false);
-  const [isSyncing,  setIsSyncing]  = useState(false);
-  const [countdown,  setCountdown]  = useState<number | null>(null);
-  const [onlineCount,setOnlineCount]= useState(0);
+  const [current,     setCurrent]     = useState<Transmission | null>(null);
+  const [loading,     setLoading]     = useState(true);
+  const [muted,       setMuted]       = useState(false);
+  const [isSyncing,   setIsSyncing]   = useState(false);
+  const [countdown,   setCountdown]   = useState<number | null>(null);
+  const [onlineCount, setOnlineCount] = useState(0);
 
   const playerMode = resolveMode(current, loading);
   const roomId   = current?.topicoId || (current ? fallbackRoomId(current) : null);
@@ -91,23 +96,38 @@ export default function AoVivo() {
       const data = await fetchGAS();
       const c: Transmission = data?.current || { status: "off", programa: "Empire TV" };
 
-      // ── Detecta fim de transmissão: estava broadcasting/kick/video → agora off ──
       const isNowInactive = c.status === "off" || c.status === "finalizado";
+
       if (isNowInactive && lastActiveRoom.current) {
-        const { roomId: rid, programa: prog } = lastActiveRoom.current;
-        if (!closedRooms.current.has(rid)) {
-          closedRooms.current.add(rid);
-          lastActiveRoom.current = null;
-          closeRoom(rid, prog).catch(err =>
-            console.error("[closeRoom]", err)
-          );
+        // Incrementa contador de confirmações consecutivas
+        inactivePollCount.current += 1;
+        console.log(`[AoVivo] Status inativo (${inactivePollCount.current}/${POLLS_TO_CLOSE})`);
+
+        if (inactivePollCount.current >= POLLS_TO_CLOSE) {
+          const { roomId: rid, programa: prog } = lastActiveRoom.current;
+          if (!closedRooms.current.has(rid)) {
+            closedRooms.current.add(rid);
+            lastActiveRoom.current = null;
+            inactivePollCount.current = 0;
+            console.log(`[AoVivo] Fechando sala "${rid}" após ${POLLS_TO_CLOSE} confirmações.`);
+            closeRoom(rid, prog).catch(err =>
+              console.error("[closeRoom]", err)
+            );
+          }
         }
+      } else {
+        // Se voltou a ficar ativo, reseta o contador
+        inactivePollCount.current = 0;
       }
 
       // ── Registra sala ativa atual ──
       if (c.status === "broadcasting") {
         const rid = c.topicoId || fallbackRoomId(c);
-        lastActiveRoom.current = { roomId: rid, programa: c.programa };
+        // Só atualiza lastActiveRoom se mudou de sala (não reseta o polling de fechamento)
+        if (!lastActiveRoom.current || lastActiveRoom.current.roomId !== rid) {
+          lastActiveRoom.current = { roomId: rid, programa: c.programa };
+          inactivePollCount.current = 0;
+        }
       }
 
       setCurrent(c);
@@ -136,7 +156,8 @@ export default function AoVivo() {
       }
     } catch (err) {
       console.error("[AoVivo] fetchAndSync:", err);
-      setCurrent({ status: "off", programa: "Empire TV" });
+      // Erro de rede NÃO conta como poll inativo — não incrementa o contador
+      setCurrent(prev => prev); // mantém estado anterior
     } finally {
       setLoading(false);
       setIsSyncing(false);
