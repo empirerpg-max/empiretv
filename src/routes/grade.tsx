@@ -1,6 +1,7 @@
 import { useEffect, useState, useMemo } from "react";
 import { motion, AnimatePresence } from "motion/react";
 import { fetchGAS } from "../lib/gas";
+import { driveImg } from "../lib/driveImg";
 import "../styles/grade.css";
 
 interface Programa {
@@ -153,6 +154,7 @@ export default function Grade() {
               const hSecs  = hParts.length >= 2 ? +hParts[0]*3600 + +hParts[1]*60 : null;
               const isLive = diaSel === hojeKey() && hSecs !== null && nowSecs >= hSecs && nowSecs < hSecs + 7200;
               const isPast = diaSel === hojeKey() && hSecs !== null && nowSecs >= hSecs + 7200;
+              const imgSrc = driveImg(p.capaUrl);
               return (
                 <motion.div key={i}
                   className={`grade-card ${isLive ? "ao-vivo" : isPast ? "passado" : ""}`}
@@ -163,8 +165,8 @@ export default function Grade() {
                   style={{ cursor: p.topicoUrl ? "pointer" : "default" }}
                 >
                   <div className="grade-card-thumb">
-                    {p.capaUrl
-                      ? <img src={p.capaUrl} alt={p.programa} />
+                    {imgSrc
+                      ? <img src={imgSrc} alt={p.programa} loading="lazy" />
                       : <div className="grade-card-thumb-placeholder">📺</div>}
                     {isLive && <span className="grade-card-live">● AO VIVO</span>}
                     {isPast && <span className="grade-card-ended">Encerrado</span>}
