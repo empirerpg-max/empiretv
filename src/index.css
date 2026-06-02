@@ -131,6 +131,7 @@ img { display: block; max-width: 100%; background: transparent; }
 }
 .nf-nav-link.active, .nf-nav-link:hover { color: var(--text); background: var(--glass-card); }
 
+/* Hero com capa */
 .nf-hero { position: relative; height: 340px; overflow: hidden; margin-bottom: 24px; }
 .nf-hero-bg { position: absolute; inset: 0; background: var(--bg2) center/cover no-repeat; }
 .nf-hero-gradient {
@@ -142,10 +143,22 @@ img { display: block; max-width: 100%; background: transparent; }
   width: 200px; height: 200px;
   background: var(--purple-glow); border-radius: 50%; filter: blur(60px); pointer-events: none;
 }
+/* Hero sem capa */
+.nf-hero-empty {
+  position: relative; overflow: hidden;
+  background: linear-gradient(135deg, #0d0d18 0%, #1a0e2e 60%, #0a0a0f 100%);
+  margin-bottom: 24px;
+}
+.nf-hero-empty-orb {
+  position: absolute; top: -20px; right: -20px;
+  width: 220px; height: 220px;
+  background: var(--purple-glow); border-radius: 50%; filter: blur(70px); pointer-events: none;
+}
 .nf-hero-content {
   position: absolute; bottom: 0; left: 0; right: 0;
   padding: 0 16px 20px; display: flex; flex-direction: column; gap: 6px;
 }
+.nf-hero-empty .nf-hero-content { position: relative; }
 .nf-live-badge {
   display: inline-flex; align-items: center; gap: 4px;
   background: var(--red-live); color: #fff;
@@ -209,8 +222,6 @@ img { display: block; max-width: 100%; background: transparent; }
 .nf-card-title   { font-size: 11px; font-weight: 700; color: var(--text); line-height: 1.3; }
 .nf-card-tipo    { font-size: 9px; color: var(--purple-light); font-weight: 500; }
 .nf-card-msgs    { font-size: 9px; color: var(--text3); }
-.nf-loading { text-align: center; color: var(--text3); padding: 40px 0; font-size: 13px; }
-.nf-empty   { text-align: center; color: var(--text3); padding: 40px 16px; font-size: 13px; }
 
 /* ============================================================
    AO VIVO
@@ -266,166 +277,43 @@ img { display: block; max-width: 100%; background: transparent; }
 /* ============================================================
    CHAT
    ============================================================ */
-.chat-wrap {
-  display: flex; flex-direction: column;
-  height: 100%; min-height: 380px;
-  background: var(--bg2);
-  border-top: 1px solid var(--glass-border);
-  overflow: hidden;
-}
-.chat-header {
-  display: flex; align-items: center; justify-content: space-between;
-  padding: 10px 14px 8px;
-  background: var(--bg3);
-  border-bottom: 1px solid var(--glass-border);
-  flex-shrink: 0;
-}
+.chat-wrap { display: flex; flex-direction: column; height: 100%; min-height: 380px; background: var(--bg2); border-top: 1px solid var(--glass-border); overflow: hidden; }
+.chat-header { display: flex; align-items: center; justify-content: space-between; padding: 10px 14px 8px; background: var(--bg3); border-bottom: 1px solid var(--glass-border); flex-shrink: 0; }
 .chat-title { font-size: 13px; font-weight: 700; color: var(--text); }
 .chat-meta  { display: flex; align-items: center; gap: 8px; }
 .chat-online { font-size: 11px; color: var(--purple-light); font-weight: 600; }
-.chat-status {
-  font-size: 10px; font-weight: 600; padding: 2px 7px; border-radius: 10px;
-  background: var(--glass-card);
-}
+.chat-status { font-size: 10px; font-weight: 600; padding: 2px 7px; border-radius: 10px; background: var(--glass-card); }
 .chat-status.open        { color: #4ade80; }
 .chat-status.connecting  { color: var(--gold); }
 .chat-status.closed      { color: var(--text3); }
 .chat-edit-nome { background: transparent; font-size: 13px; color: var(--text3); padding: 2px 4px; }
-.chat-archived {
-  background: rgba(239,68,68,0.08); border-bottom: 1px solid rgba(239,68,68,0.2);
-  color: #f87171; font-size: 11px; font-weight: 600; padding: 6px 14px; flex-shrink: 0;
-}
-.chat-messages {
-  flex: 1; overflow-y: auto; padding: 10px 14px;
-  display: flex; flex-direction: column; gap: 8px;
-  scrollbar-width: thin; scrollbar-color: var(--purple) transparent;
-}
+.chat-archived { background: rgba(239,68,68,0.08); border-bottom: 1px solid rgba(239,68,68,0.2); color: #f87171; font-size: 11px; font-weight: 600; padding: 6px 14px; flex-shrink: 0; }
+.chat-messages { flex: 1; overflow-y: auto; padding: 10px 14px; display: flex; flex-direction: column; gap: 8px; scrollbar-width: thin; scrollbar-color: var(--purple) transparent; }
 .chat-messages::-webkit-scrollbar { width: 3px; }
 .chat-messages::-webkit-scrollbar-thumb { background: var(--purple); border-radius: 2px; }
 .chat-empty { text-align: center; color: var(--text3); font-size: 12px; padding: 20px 0; }
-
-.chat-msg {
-  display: flex; flex-direction: column; gap: 2px;
-  max-width: 88%;
-  align-self: flex-start;
-}
+.chat-msg { display: flex; flex-direction: column; gap: 2px; max-width: 88%; align-self: flex-start; }
 .chat-msg.own { align-self: flex-end; align-items: flex-end; }
-.chat-msg-nome {
-  font-size: 10px; font-weight: 700;
-  color: var(--purple-light);
-}
+.chat-msg-nome { font-size: 10px; font-weight: 700; color: var(--purple-light); }
 .chat-msg.own .chat-msg-nome { color: var(--gold); }
-.chat-msg-texto {
-  background: var(--surface); color: var(--text);
-  font-size: 12px; line-height: 1.45; padding: 7px 10px;
-  border-radius: 12px 12px 12px 3px;
-  border: 1px solid var(--glass-border);
-  word-break: break-word;
-}
-.chat-msg.own .chat-msg-texto {
-  background: var(--purple); color: #fff;
-  border-radius: 12px 12px 3px 12px;
-  border-color: var(--purple2);
-}
+.chat-msg-texto { background: var(--surface); color: var(--text); font-size: 12px; line-height: 1.45; padding: 7px 10px; border-radius: 12px 12px 12px 3px; border: 1px solid var(--glass-border); word-break: break-word; }
+.chat-msg.own .chat-msg-texto { background: var(--purple); color: #fff; border-radius: 12px 12px 3px 12px; border-color: var(--purple2); }
 .chat-msg-hora { font-size: 9px; color: var(--text3); }
 .chat-gif { max-width: 180px; border-radius: 8px; }
-
-.chat-input-row {
-  display: flex; gap: 8px; padding: 10px 14px 12px;
-  border-top: 1px solid var(--glass-border);
-  background: var(--bg3); flex-shrink: 0;
-}
-.chat-input {
-  flex: 1; background: var(--surface);
-  border: 1px solid var(--glass-border);
-  border-radius: 20px; color: var(--text);
-  font-size: 13px; padding: 9px 14px;
-  outline: none; transition: border-color 0.18s;
-  font-family: inherit;
-}
+.chat-input-row { display: flex; gap: 8px; padding: 10px 14px 12px; border-top: 1px solid var(--glass-border); background: var(--bg3); flex-shrink: 0; }
+.chat-input { flex: 1; background: var(--surface); border: 1px solid var(--glass-border); border-radius: 20px; color: var(--text); font-size: 13px; padding: 9px 14px; outline: none; transition: border-color 0.18s; font-family: inherit; }
 .chat-input:focus { border-color: var(--purple2); }
 .chat-input::placeholder { color: var(--text3); }
 .chat-input:disabled { opacity: 0.5; }
-.chat-send {
-  width: 36px; height: 36px;
-  background: var(--purple); color: #fff;
-  border-radius: 50%; font-size: 14px;
-  display: flex; align-items: center; justify-content: center;
-  transition: background 0.18s; flex-shrink: 0;
-}
+.chat-send { width: 36px; height: 36px; background: var(--purple); color: #fff; border-radius: 50%; font-size: 14px; display: flex; align-items: center; justify-content: center; transition: background 0.18s; flex-shrink: 0; }
 .chat-send:hover:not(:disabled) { background: var(--purple2); }
 .chat-send:disabled { opacity: 0.4; }
-
-/* Tela de nome */
-.chat-nome-screen {
-  display: flex; flex-direction: column; align-items: center; justify-content: center;
-  gap: 14px; padding: 40px 24px; flex: 1;
-  background: var(--bg2);
-}
+.chat-nome-screen { display: flex; flex-direction: column; align-items: center; justify-content: center; gap: 14px; padding: 40px 24px; flex: 1; background: var(--bg2); }
 .chat-nome-title { font-size: 15px; font-weight: 700; color: var(--text); text-align: center; }
-.chat-nome-input {
-  width: 100%; max-width: 280px;
-  background: var(--surface); border: 1px solid var(--glass-border);
-  border-radius: 12px; color: var(--text);
-  font-size: 15px; padding: 12px 16px;
-  outline: none; text-align: center;
-  font-family: inherit; transition: border-color 0.18s;
-}
+.chat-nome-input { width: 100%; max-width: 280px; background: var(--surface); border: 1px solid var(--glass-border); border-radius: 12px; color: var(--text); font-size: 15px; padding: 12px 16px; outline: none; text-align: center; font-family: inherit; transition: border-color 0.18s; }
 .chat-nome-input:focus { border-color: var(--purple2); }
-.chat-nome-btn {
-  background: var(--purple); color: #fff;
-  font-size: 14px; font-weight: 700;
-  padding: 11px 28px; border-radius: 12px;
-  transition: background 0.18s;
-}
+.chat-nome-btn { background: var(--purple); color: #fff; font-size: 14px; font-weight: 700; padding: 11px 28px; border-radius: 12px; transition: background 0.18s; }
 .chat-nome-btn:hover { background: var(--purple2); }
-
-/* ============================================================
-   GRADE — calendário
-   ============================================================ */
-.grade-page { padding: 0 0 24px; }
-.grade-title { font-size: 20px; font-weight: 800; color: var(--text); padding: 16px 16px 12px; }
-.grade-cal-wrap {
-  position: sticky; top: 0; z-index: 20;
-  background: rgba(10,10,15,0.97); backdrop-filter: blur(16px);
-  border-bottom: 1px solid var(--glass-border); padding: 0 0 2px;
-}
-.grade-cal { display: flex; gap: 0; overflow-x: auto; padding: 8px 12px; scrollbar-width: none; }
-.grade-cal::-webkit-scrollbar { display: none; }
-.grade-cal-day {
-  flex: 0 0 52px; display: flex; flex-direction: column; align-items: center; gap: 3px;
-  padding: 6px 4px; border-radius: 10px; background: transparent; color: var(--text3);
-  font-size: 10px; transition: all 0.18s; border: 1px solid transparent;
-}
-.grade-cal-day:hover { background: var(--glass-card); color: var(--text); }
-.grade-cal-day.active { background: var(--purple); color: #fff; border-color: var(--purple2); box-shadow: 0 2px 12px var(--purple-glow); }
-.grade-cal-label { font-size: 9px; font-weight: 700; text-transform: uppercase; letter-spacing: 0.05em; }
-.grade-cal-num   { font-size: 13px; font-weight: 800; }
-.grade-loading, .grade-erro { text-align: center; color: var(--text3); padding: 32px 0; font-size: 13px; }
-.grade-erro { color: #f87171; }
-.grade-vazia { display: flex; flex-direction: column; align-items: center; gap: 8px; text-align: center; padding: 48px 24px; color: var(--text3); font-size: 13px; }
-.grade-lista { list-style: none; display: flex; flex-direction: column; padding: 12px 0; }
-.grade-item { display: flex; gap: 0; padding: 0 16px 0 0; transition: background 0.18s; }
-.grade-item.atual .grade-item-body { border-left: 2px solid var(--red-live); background: rgba(239,68,68,0.04); }
-.grade-item.passado { opacity: 0.45; }
-.grade-timeline { display: flex; flex-direction: column; align-items: center; width: 32px; flex-shrink: 0; padding-top: 16px; }
-.grade-tl-dot { width: 10px; height: 10px; border-radius: 50%; background: var(--surface2); border: 2px solid var(--text3); flex-shrink: 0; z-index: 1; transition: all 0.2s; }
-.grade-tl-dot.ao-vivo { background: var(--red-live); border-color: var(--red-live); box-shadow: 0 0 8px var(--red-live); animation: blink 1.4s infinite; }
-.grade-tl-dot.passado { background: var(--text3); border-color: var(--text3); }
-.grade-tl-line { flex: 1; width: 2px; background: var(--glass-border); min-height: 16px; margin: 3px 0; }
-.grade-item-body { flex: 1; padding: 12px 0 16px 12px; border-left: 2px solid var(--glass-border); }
-.grade-item-top { display: flex; gap: 12px; align-items: flex-start; }
-.grade-capa { width: 64px; height: 64px; object-fit: cover; border-radius: 8px; flex-shrink: 0; }
-.grade-capa-placeholder { width: 64px; height: 64px; display: flex; align-items: center; justify-content: center; background: var(--bg3); border-radius: 8px; font-size: 22px; flex-shrink: 0; }
-.grade-item-info { display: flex; flex-direction: column; gap: 3px; flex: 1; }
-.grade-item-row1 { display: flex; align-items: center; gap: 8px; flex-wrap: wrap; }
-.grade-ao-vivo { font-size: 9px; font-weight: 800; color: var(--red-live); letter-spacing: 0.1em; animation: pulse-badge 2s infinite; }
-.grade-passado-tag { font-size: 9px; font-weight: 600; color: var(--text3); background: var(--glass-card); padding: 1px 6px; border-radius: 4px; }
-.grade-horario  { font-size: 11px; font-weight: 700; color: var(--gold); }
-.grade-programa { font-size: 14px; font-weight: 700; color: var(--text); line-height: 1.3; }
-.grade-tipo     { font-size: 10px; color: var(--purple-light); font-weight: 500; }
-.grade-material { font-size: 11px; color: var(--text2); line-height: 1.4; margin-top: 2px; }
-.grade-buff     { font-size: 10px; color: var(--gold2); margin-top: 2px; }
 
 /* ============================================================
    ARQUIVO
