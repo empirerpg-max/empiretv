@@ -1,5 +1,6 @@
 import { useEffect, useState } from "react";
 import { motion, AnimatePresence } from "motion/react";
+import { driveImg } from "../lib/driveImg";
 
 const BACKEND = "https://empiretv-chat-backend.onrender.com";
 
@@ -52,7 +53,7 @@ export default function Arquivo() {
             <button className="arquivo-back" onClick={() => setSelected(null)}>← Voltar</button>
             <div className="arquivo-detail-header">
               {selected.capaUrl
-                ? <img src={selected.capaUrl} alt={selected.programa} className="arquivo-detail-capa" />
+                ? <img src={driveImg(selected.capaUrl)} alt={selected.programa} className="arquivo-detail-capa" loading="lazy" />
                 : <div className="arquivo-thumb-placeholder">🎬</div>}
               <div>
                 <div className="arquivo-detail-title">{selected.programa}</div>
@@ -110,7 +111,7 @@ export default function Arquivo() {
                   onClick={() => openRoom(item)}
                 >
                   {item.capaUrl
-                    ? <img src={item.capaUrl} alt={item.programa} className="arquivo-thumb" />
+                    ? <img src={driveImg(item.capaUrl)} alt={item.programa} className="arquivo-thumb" loading="lazy" />
                     : <div className="arquivo-thumb-placeholder">🎬</div>}
                   <div className="arquivo-item-info">
                     <span className="arquivo-programa">{item.programa}</span>
