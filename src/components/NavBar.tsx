@@ -1,9 +1,10 @@
 import type { Tab } from "../App";
 
 const TABS: { id: Tab; label: string; icon: string }[] = [
-  { id: "ao-vivo",  label: "Ao Vivo",  icon: "📺" },
-  { id: "grade",   label: "Grade",    icon: "📋" },
-  { id: "arquivo", label: "Arquivo",  icon: "🎬" },
+  { id: "home",    label: "Início",  icon: "🏠" },
+  { id: "ao-vivo", label: "Ao Vivo", icon: "📺" },
+  { id: "grade",   label: "Grade",   icon: "📋" },
+  { id: "arquivo", label: "Arquivo", icon: "🎬" },
 ];
 
 export default function NavBar({ current, onNavigate }: { current: Tab; onNavigate: (t: Tab) => void }) {
