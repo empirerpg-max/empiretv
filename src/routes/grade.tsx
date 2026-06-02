@@ -5,40 +5,29 @@ import { fetchGAS } from "../lib/gas";
 interface Programa {
   programa: string; tipo: string; material?: string;
   buff?: string; horarioStr?: string; data?: string;
-  capaUrl?: string; status?: string; fonte?: string;
+  capaUrl?: string; topicoUrl?: string;
 }
 
-// Gera os 14 próximos dias a partir de hoje
-function gerarDias() {
-  const dias: { label: string; key: string; full: string }[] = [];
-  const weekNames = ["Dom","Seg","Ter","Qua","Qui","Sex","Sáb"];
-  for (let i = 0; i < 14; i++) {
-    const d = new Date();
-    d.setDate(d.getDate() + i);
-    const dd   = String(d.getDate()).padStart(2, "0");
-    const mm   = String(d.getMonth() + 1).padStart(2, "0");
-    const yyyy = d.getFullYear();
-    const key  = `${dd}/${mm}/${yyyy}`;
-    const label = i === 0 ? "Hoje" : i === 1 ? "Amanhã" : weekNames[d.getDay()];
-    dias.push({ label, key, full: `${dd}/${mm}` });
-  }
-  return dias;
+function toKey(d: Date) {
+  return `${String(d.getDate()).padStart(2,"0")}/${String(d.getMonth()+1).padStart(2,"0")}/${d.getFullYear()}`;
+}
+function hojeKey() { return toKey(new Date()); }
+function parseKey(key: string): Date {
+  const [dd, mm, yyyy] = key.split("/");
+  return new Date(+yyyy, +mm - 1, +dd);
 }
 
-function hojeKey() {
-  const d = new Date();
-  const dd = String(d.getDate()).padStart(2, "0");
-  const mm = String(d.getMonth() + 1).padStart(2, "0");
-  return `${dd}/${mm}/${d.getFullYear()}`;
-}
+const SEMANA = ["Dom","Seg","Ter","Qua","Qui","Sex","Sáb"];
+const MESES  = ["Janeiro","Fevereiro","Março","Abril","Maio","Junho",
+                "Julho","Agosto","Setembro","Outubro","Novembro","Dezembro"];
 
 export default function Grade() {
   const [items,   setItems]   = useState<Programa[]>([]);
   const [loading, setLoading] = useState(true);
   const [erro,    setErro]    = useState("");
   const [diaSel,  setDiaSel]  = useState(hojeKey());
-
-  const dias = useMemo(() => gerarDias(), []);
+  const hoje = new Date();
+  const [mesVis, setMesVis]   = useState({ year: hoje.getFullYear(), month: hoje.getMonth() });
 
   useEffect(() => {
     fetchGAS()
@@ -47,117 +36,152 @@ export default function Grade() {
       .finally(() => setLoading(false));
   }, []);
 
-  // Filtra por dia selecionado
+  // Dias do mês visível
+  const diasDoMes = useMemo(() => {
+    const { year, month } = mesVis;
+    const primeiro = new Date(year, month, 1);
+    const ultimo   = new Date(year, month + 1, 0);
+    const cells: (Date | null)[] = [];
+    for (let i = 0; i < primeiro.getDay(); i++) cells.push(null);
+    for (let d = 1; d <= ultimo.getDate(); d++) cells.push(new Date(year, month, d));
+    return cells;
+  }, [mesVis]);
+
+  // Quais dias têm programas
+  const diasComEvento = useMemo(() => {
+    const set = new Set<string>();
+    items.forEach(p => { if (p.data) set.add(p.data.trim()); });
+    return set;
+  }, [items]);
+
+  // Programas do dia selecionado
   const itensDia = useMemo(() => {
-    return items.filter(p => {
-      const d = String(p.data || "").trim();
-      // Aceita dd/MM/yyyy ou dd/MM/yy ou sem data (considera hoje)
-      if (!d) return diaSel === hojeKey();
-      // Normaliza ano 2 dígitos
-      const parts = d.split("/");
-      if (parts.length === 3) {
-        const ano = parts[2].length === 2 ? "20" + parts[2] : parts[2];
-        return `${parts[0]}/${parts[1]}/${ano}` === diaSel;
-      }
-      return false;
-    });
+    return items
+      .filter(p => String(p.data || "").trim() === diaSel)
+      .sort((a, b) => (a.horarioStr || "").localeCompare(b.horarioStr || ""));
   }, [items, diaSel]);
 
   const now = new Date();
-  const nowSecs = now.getHours() * 3600 + now.getMinutes() * 60 + now.getSeconds();
+  const nowSecs = now.getHours() * 3600 + now.getMinutes() * 60;
+
+  function prevMes() {
+    setMesVis(p => p.month === 0
+      ? { year: p.year - 1, month: 11 }
+      : { year: p.year, month: p.month - 1 });
+  }
+  function nextMes() {
+    setMesVis(p => p.month === 11
+      ? { year: p.year + 1, month: 0 }
+      : { year: p.year, month: p.month + 1 });
+  }
+
+  const dataSel = parseKey(diaSel);
+  const labelDia = diaSel === hojeKey() ? "Hoje" : diaSel === toKey(new Date(hoje.getFullYear(), hoje.getMonth(), hoje.getDate() + 1)) ? "Amanhã" : `${SEMANA[dataSel.getDay()]}, ${dataSel.getDate()} de ${MESES[dataSel.getMonth()]}`;
 
   return (
     <div className="grade-page">
       <h1 className="grade-title">Grade de Programação</h1>
 
-      {/* ── Calendário horizontal ── */}
-      <div className="grade-cal-wrap">
-        <div className="grade-cal">
-          {dias.map(dia => (
-            <button
-              key={dia.key}
-              className={`grade-cal-day ${diaSel === dia.key ? "active" : ""}`}
-              onClick={() => setDiaSel(dia.key)}
-            >
-              <span className="grade-cal-label">{dia.label}</span>
-              <span className="grade-cal-num">{dia.full}</span>
-            </button>
-          ))}
+      {/* ── Calendário mensal ── */}
+      <div className="grade-cal-card">
+        <div className="grade-cal-header">
+          <button className="grade-cal-nav" onClick={prevMes}>‹</button>
+          <span className="grade-cal-mes">{MESES[mesVis.month]} {mesVis.year}</span>
+          <button className="grade-cal-nav" onClick={nextMes}>›</button>
+        </div>
+
+        <div className="grade-cal-semana">
+          {SEMANA.map(s => <span key={s}>{s}</span>)}
+        </div>
+
+        <div className="grade-cal-grid">
+          {diasDoMes.map((d, i) => {
+            if (!d) return <div key={`e${i}`} className="grade-cal-cell empty" />;
+            const key     = toKey(d);
+            const isHoje  = key === hojeKey();
+            const isSel   = key === diaSel;
+            const temEvento = diasComEvento.has(key);
+            return (
+              <button
+                key={key}
+                className={`grade-cal-cell ${
+                  isSel ? "sel" : isHoje ? "hoje" : ""
+                } ${temEvento ? "tem-evento" : ""}`}
+                onClick={() => {
+                  setDiaSel(key);
+                }}
+              >
+                <span>{d.getDate()}</span>
+                {temEvento && <span className="grade-cal-dot" />}
+              </button>
+            );
+          })}
         </div>
       </div>
 
-      {/* ── Conteúdo ── */}
+      {/* ── Lista do dia ── */}
+      <div className="grade-dia-header">
+        <span className="grade-dia-label">{labelDia}</span>
+        <span className="grade-dia-count">{itensDia.length} programa{itensDia.length !== 1 ? "s" : ""}</span>
+      </div>
+
       {loading && <div className="grade-loading">Carregando…</div>}
       {erro    && <div className="grade-erro">{erro}</div>}
 
       <AnimatePresence mode="wait">
         <motion.div
           key={diaSel}
-          initial={{ opacity: 0, y: 12 }}
+          initial={{ opacity: 0, y: 14 }}
           animate={{ opacity: 1, y: 0 }}
           exit={{ opacity: 0, y: -8 }}
-          transition={{ duration: 0.25 }}
+          transition={{ duration: 0.22 }}
         >
           {!loading && !erro && itensDia.length === 0 && (
             <div className="grade-vazia">
               <span style={{ fontSize: 40 }}>📭</span>
               <p>Sem programas para este dia.</p>
-              <p style={{ fontSize: 11, color: "var(--text3)" }}>Selecione outro dia no calendário.</p>
             </div>
           )}
 
-          <ul className="grade-lista">
+          <div className="grade-cards">
             {itensDia.map((p, i) => {
-              // calcula se está passado, atual ou futuro
               const hParts = (p.horarioStr || "").split(":");
-              const hSecs  = hParts.length >= 2
-                ? parseInt(hParts[0]) * 3600 + parseInt(hParts[1]) * 60
-                : null;
-              const isAtual = p.status === "broadcasting" || (
-                diaSel === hojeKey() && hSecs !== null &&
-                nowSecs >= hSecs && nowSecs < hSecs + 7200
-              );
+              const hSecs  = hParts.length >= 2 ? +hParts[0] * 3600 + +hParts[1] * 60 : null;
+              const isAoVivo  = diaSel === hojeKey() && hSecs !== null && nowSecs >= hSecs && nowSecs < hSecs + 7200;
               const isPassado = diaSel === hojeKey() && hSecs !== null && nowSecs >= hSecs + 7200;
 
               return (
-                <motion.li
+                <motion.div
                   key={i}
-                  className={`grade-item ${
-                    isAtual ? "atual" : isPassado ? "passado" : ""
-                  }`}
-                  initial={{ opacity: 0, x: -16 }}
-                  animate={{ opacity: 1, x: 0 }}
-                  transition={{ duration: 0.26, delay: i * 0.04 }}
-                  whileHover={{ x: 3, transition: { type: "spring", stiffness: 300, damping: 22 } }}
+                  className={`grade-card ${isAoVivo ? "ao-vivo" : isPassado ? "passado" : ""}`}
+                  initial={{ opacity: 0, y: 16 }}
+                  animate={{ opacity: 1, y: 0 }}
+                  transition={{ duration: 0.24, delay: i * 0.05 }}
+                  whileHover={{ y: -3, transition: { type: "spring", stiffness: 300, damping: 20 } }}
+                  onClick={() => { if (p.topicoUrl) window.open(p.topicoUrl, "_blank"); }}
+                  style={{ cursor: p.topicoUrl ? "pointer" : "default" }}
                 >
-                  {/* Linha de tempo vertical */}
-                  <div className="grade-timeline">
-                    <div className={`grade-tl-dot ${isAtual ? "ao-vivo" : isPassado ? "passado" : ""}`} />
-                    {i < itensDia.length - 1 && <div className="grade-tl-line" />}
+                  {/* Capa */}
+                  <div className="grade-card-thumb">
+                    {p.capaUrl
+                      ? <img src={p.capaUrl} alt={p.programa} />
+                      : <div className="grade-card-thumb-placeholder">📺</div>}
+                    {isAoVivo && <span className="grade-card-live">● AO VIVO</span>}
+                    {isPassado && <span className="grade-card-ended">Encerrado</span>}
                   </div>
 
-                  <div className="grade-item-body">
-                    <div className="grade-item-top">
-                      {p.capaUrl
-                        ? <img src={p.capaUrl} alt={p.programa} className="grade-capa" />
-                        : <div className="grade-capa-placeholder">📺</div>}
-                      <div className="grade-item-info">
-                        <div className="grade-item-row1">
-                          <span className="grade-horario">{p.horarioStr || "—"}</span>
-                          {isAtual && <span className="grade-ao-vivo">● AO VIVO</span>}
-                          {isPassado && <span className="grade-passado-tag">Encerrado</span>}
-                        </div>
-                        <span className="grade-programa">{p.programa}</span>
-                        {p.tipo && <span className="grade-tipo">{p.tipo}</span>}
-                        {p.material && <p className="grade-material">{p.material}</p>}
-                        {p.buff && <span className="grade-buff">🎮 {p.buff}</span>}
-                      </div>
-                    </div>
+                  {/* Info */}
+                  <div className="grade-card-info">
+                    <span className="grade-card-horario">{p.horarioStr || "—"}</span>
+                    <span className="grade-card-programa">{p.programa}</span>
+                    {p.tipo     && <span className="grade-card-tipo">{p.tipo}</span>}
+                    {p.material && <span className="grade-card-material">{p.material}</span>}
+                    {p.buff     && <span className="grade-card-buff">🎮 {p.buff}</span>}
                   </div>
-                </motion.li>
+                </motion.div>
               );
             })}
-          </ul>
+          </div>
         </motion.div>
       </AnimatePresence>
     </div>

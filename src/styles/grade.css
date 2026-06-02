@@ -1,0 +1,253 @@
+/* ============================================================
+   GRADE — Calendário mensal + cards com capa
+   ============================================================ */
+
+.grade-page {
+  min-height: 100vh;
+  padding: 1.5rem 1rem 6rem;
+  max-width: 520px;
+  margin: 0 auto;
+}
+
+.grade-title {
+  font-size: 1.2rem;
+  font-weight: 700;
+  color: var(--text1, #fff);
+  margin-bottom: 1.25rem;
+  text-align: center;
+  letter-spacing: .02em;
+}
+
+/* ── Calendário mensal ─────────────────────────────────────── */
+.grade-cal-card {
+  background: var(--glass, rgba(255,255,255,.06));
+  border: 1px solid rgba(255,255,255,.1);
+  border-radius: 16px;
+  padding: 1rem;
+  margin-bottom: 1.25rem;
+  backdrop-filter: blur(12px);
+}
+
+.grade-cal-header {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  margin-bottom: .75rem;
+}
+
+.grade-cal-mes {
+  font-weight: 700;
+  font-size: .95rem;
+  color: var(--text1, #fff);
+  letter-spacing: .03em;
+}
+
+.grade-cal-nav {
+  background: rgba(255,255,255,.08);
+  border: none;
+  color: var(--text1, #fff);
+  border-radius: 8px;
+  width: 32px; height: 32px;
+  font-size: 1.2rem;
+  cursor: pointer;
+  transition: background .15s;
+  display: flex; align-items: center; justify-content: center;
+}
+.grade-cal-nav:hover { background: var(--purple, #a470f0); }
+
+.grade-cal-semana {
+  display: grid;
+  grid-template-columns: repeat(7, 1fr);
+  text-align: center;
+  font-size: .68rem;
+  color: var(--text3, #aaa);
+  font-weight: 600;
+  margin-bottom: .4rem;
+  text-transform: uppercase;
+  letter-spacing: .05em;
+}
+
+.grade-cal-grid {
+  display: grid;
+  grid-template-columns: repeat(7, 1fr);
+  gap: 3px;
+}
+
+.grade-cal-cell {
+  position: relative;
+  background: none;
+  border: none;
+  color: var(--text2, #ccc);
+  border-radius: 8px;
+  padding: 0;
+  height: 40px;
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  justify-content: center;
+  font-size: .82rem;
+  cursor: pointer;
+  transition: background .13s, color .13s;
+  gap: 2px;
+}
+.grade-cal-cell:hover:not(.empty) { background: rgba(164,112,240,.18); }
+.grade-cal-cell.empty { cursor: default; pointer-events: none; }
+
+.grade-cal-cell.hoje {
+  color: var(--purple, #a470f0);
+  font-weight: 700;
+}
+
+.grade-cal-cell.sel {
+  background: var(--purple, #a470f0);
+  color: #fff;
+  font-weight: 700;
+}
+
+.grade-cal-cell.tem-evento .grade-cal-dot {
+  width: 5px; height: 5px;
+  border-radius: 50%;
+  background: var(--purple, #a470f0);
+}
+.grade-cal-cell.sel .grade-cal-dot { background: #fff; }
+
+/* ── Cabeçalho do dia ─────────────────────────────────────── */
+.grade-dia-header {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  margin-bottom: .85rem;
+  padding: 0 .25rem;
+}
+.grade-dia-label {
+  font-weight: 700;
+  font-size: 1rem;
+  color: var(--text1, #fff);
+}
+.grade-dia-count {
+  font-size: .75rem;
+  color: var(--text3, #aaa);
+}
+
+/* ── Cards ────────────────────────────────────────────────── */
+.grade-cards {
+  display: flex;
+  flex-direction: column;
+  gap: .85rem;
+}
+
+.grade-card {
+  display: flex;
+  gap: .85rem;
+  background: var(--glass, rgba(255,255,255,.06));
+  border: 1px solid rgba(255,255,255,.08);
+  border-radius: 14px;
+  overflow: hidden;
+  transition: border-color .2s, box-shadow .2s;
+}
+.grade-card.ao-vivo {
+  border-color: #e53935;
+  box-shadow: 0 0 0 2px rgba(229,57,53,.25);
+}
+.grade-card.passado { opacity: .5; }
+
+/* Thumb */
+.grade-card-thumb {
+  position: relative;
+  width: 96px;
+  min-width: 96px;
+  height: 80px;
+  overflow: hidden;
+  background: rgba(255,255,255,.05);
+  flex-shrink: 0;
+}
+.grade-card-thumb img {
+  width: 100%; height: 100%;
+  object-fit: cover;
+  display: block;
+}
+.grade-card-thumb-placeholder {
+  width: 100%; height: 100%;
+  display: flex; align-items: center; justify-content: center;
+  font-size: 2rem;
+  color: var(--text3, #aaa);
+}
+.grade-card-live {
+  position: absolute;
+  top: 4px; left: 4px;
+  background: #e53935;
+  color: #fff;
+  font-size: .6rem;
+  font-weight: 700;
+  padding: 2px 6px;
+  border-radius: 4px;
+  letter-spacing: .05em;
+}
+.grade-card-ended {
+  position: absolute;
+  top: 4px; left: 4px;
+  background: rgba(0,0,0,.5);
+  color: #ccc;
+  font-size: .6rem;
+  font-weight: 600;
+  padding: 2px 6px;
+  border-radius: 4px;
+}
+
+/* Info */
+.grade-card-info {
+  display: flex;
+  flex-direction: column;
+  justify-content: center;
+  gap: .2rem;
+  padding: .6rem .75rem .6rem 0;
+  min-width: 0;
+}
+.grade-card-horario {
+  font-size: .78rem;
+  color: var(--purple, #a470f0);
+  font-weight: 700;
+  font-variant-numeric: tabular-nums;
+}
+.grade-card-programa {
+  font-size: .9rem;
+  font-weight: 700;
+  color: var(--text1, #fff);
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+.grade-card-tipo {
+  font-size: .72rem;
+  color: var(--text3, #aaa);
+  background: rgba(255,255,255,.07);
+  padding: 2px 7px;
+  border-radius: 4px;
+  width: fit-content;
+}
+.grade-card-material {
+  font-size: .72rem;
+  color: var(--text2, #ccc);
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+.grade-card-buff {
+  font-size: .72rem;
+  color: #f59e0b;
+}
+
+/* ── Estados ──────────────────────────────────────────────── */
+.grade-loading,
+.grade-erro,
+.grade-vazia {
+  text-align: center;
+  padding: 2.5rem 1rem;
+  color: var(--text3, #aaa);
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  gap: .5rem;
+  font-size: .9rem;
+}
+.grade-erro { color: #f87171; }
