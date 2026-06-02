@@ -1,23 +1,34 @@
 import type { Tab } from "../App";
 
-const TABS: { id: Tab; label: string; icon: string }[] = [
-  { id: "home",    label: "Início",  icon: "🏠" },
-  { id: "ao-vivo", label: "Ao Vivo", icon: "📺" },
-  { id: "grade",   label: "Grade",   icon: "📋" },
-  { id: "arquivo", label: "Arquivo", icon: "🎬" },
-];
+const ICONS: Record<Tab, string> = {
+  "home":    "https://i.imgur.com/NFj1HK2.png",
+  "ao-vivo": "https://i.imgur.com/pADidsJ.png",
+  "grade":   "https://i.imgur.com/fToxRWs.png",
+  "arquivo": "https://i.imgur.com/EdqAlej.png",
+};
+
+const LABELS: Record<Tab, string> = {
+  "home":    "Início",
+  "ao-vivo": "Ao Vivo",
+  "grade":   "Grade",
+  "arquivo": "Arquivo",
+};
+
+const TABS: Tab[] = ["home", "ao-vivo", "grade", "arquivo"];
 
 export default function NavBar({ current, onNavigate }: { current: Tab; onNavigate: (t: Tab) => void }) {
   return (
     <nav className="navbar">
       {TABS.map(t => (
         <button
-          key={t.id}
-          className={`nav-btn ${current === t.id ? "active" : ""}`}
-          onClick={() => onNavigate(t.id)}
+          key={t}
+          className={`nav-btn ${current === t ? "active" : ""}`}
+          onClick={() => onNavigate(t)}
         >
-          <span className="nav-icon">{t.icon}</span>
-          <span className="nav-label">{t.label}</span>
+          <span className="nav-icon">
+            <img src={ICONS[t]} alt={LABELS[t]} />
+          </span>
+          <span className="nav-label">{LABELS[t]}</span>
         </button>
       ))}
     </nav>

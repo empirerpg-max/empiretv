@@ -1,49 +1,33 @@
 import React, { useEffect, useRef, useState, useCallback } from "react";
 import Chat from "../components/Chat";
 
-const GAS_URL = "https://script.google.com/macros/s/AKfycby7OeFYuai1QoTEXD427-Kn_2KBvh3nakD4iKSuOji9-i3x7sK8DD59BHRBRc5Ow1YB/exec";
+const GAS_URL = "https://script.google.com/macros/s/AKfycby7OeFYuai1QoTEXD427-Kn_2KBvh3nakD4iKSuOji9-i3b7sK8DD59BHRBRc5Ow1YB/exec";
 const CHAT_URL = "https://empiretv-chat-backend.onrender.com";
+const LOGO = "https://i.imgur.com/6cL3Ca9.png";
 
 interface Transmission {
-  status: string;
-  programa: string;
-  tipo: string;
-  materialTocando?: string;
-  buff?: string;
-  videoUrl: string;
-  seekOffset: number;
-  durationSeconds?: number;
-  startedAt?: string;
-  isBackup: boolean;
-  rowNum?: number;
-  topicoId?: string;
-  capaUrl?: string;
+  status: string; programa: string; tipo: string;
+  materialTocando?: string; buff?: string;
+  videoUrl: string; seekOffset: number;
+  durationSeconds?: number; isBackup: boolean;
+  rowNum?: number; topicoId?: string; capaUrl?: string;
   secondsToStart?: number;
 }
 
-function genUserId() {
-  let id = localStorage.getItem("etv_uid");
-  if (!id) { id = "u_" + Date.now().toString(36); localStorage.setItem("etv_uid", id); }
-  return id;
-}
-function getNome() {
-  return localStorage.getItem("etv_nome") || "Espectador";
-}
+function genUid()  { let id = localStorage.getItem("etv_uid");  if (!id) { id = "u_" + Date.now().toString(36); localStorage.setItem("etv_uid", id); } return id; }
 
 export default function AoVivo() {
-  const videoRef       = useRef<HTMLVideoElement>(null);
+  const videoRef        = useRef<HTMLVideoElement>(null);
   const staticCanvasRef = useRef<HTMLCanvasElement>(null);
-  const currentUrlRef  = useRef("");
-  const errorCountRef  = useRef(0);
+  const currentUrlRef   = useRef("");
+  const errorCountRef   = useRef(0);
 
   const [current,   setCurrent]   = useState<Transmission | null>(null);
   const [loading,   setLoading]   = useState(true);
-  const [erro,      setErro]      = useState("");
   const [useStatic, setUseStatic] = useState(false);
   const [muted,     setMuted]     = useState(false);
   const [isSyncing, setIsSyncing] = useState(false);
   const [countdown, setCountdown] = useState<number | null>(null);
-  const [showChat,  setShowChat]  = useState(false);
   const [onlineCount, setOnlineCount] = useState(0);
 
   // Estática analógica
@@ -54,26 +38,13 @@ export default function AoVivo() {
     const ctx = canvas.getContext("2d");
     if (!ctx) return;
     let animId: number;
-    const resize = () => {
-      canvas.width  = canvas.parentElement?.clientWidth  || 640;
-      canvas.height = canvas.parentElement?.clientHeight || 360;
-    };
-    resize();
-    window.addEventListener("resize", resize);
+    const resize = () => { canvas.width = canvas.parentElement?.clientWidth || 640; canvas.height = canvas.parentElement?.clientHeight || 360; };
+    resize(); window.addEventListener("resize", resize);
     const draw = () => {
       const { width: w, height: h } = canvas;
       const img = ctx.createImageData(w, h);
-      for (let i = 0; i < img.data.length; i += 4) {
-        const v = Math.floor(Math.random() * 255);
-        img.data[i] = img.data[i+1] = img.data[i+2] = v; img.data[i+3] = 255;
-      }
+      for (let i = 0; i < img.data.length; i += 4) { const v = Math.floor(Math.random() * 255); img.data[i] = img.data[i+1] = img.data[i+2] = v; img.data[i+3] = 255; }
       ctx.putImageData(img, 0, 0);
-      ctx.fillStyle = "rgba(0,0,0,.45)";
-      ctx.fillRect(16,16,220,44);
-      ctx.strokeStyle = "#8b5cf6"; ctx.lineWidth = 1.5;
-      ctx.strokeRect(16,16,220,44);
-      ctx.fillStyle = "#fff"; ctx.font = "bold 13px monospace";
-      ctx.fillText("📡 PROCURANDO SINAL...", 28, 43);
       animId = requestAnimationFrame(draw);
     };
     draw();
@@ -85,31 +56,24 @@ export default function AoVivo() {
     try {
       const res  = await fetch(GAS_URL);
       const data = await res.json();
-      if (data.status !== "success" || !data.current) {
-        setErro("Nenhuma transmissão no momento."); setUseStatic(true); setLoading(false); setIsSyncing(false); return;
-      }
+      if (data.status !== "success" || !data.current) { setUseStatic(true); setLoading(false); setIsSyncing(false); return; }
       const c: Transmission = data.current;
-      setCurrent(c); setErro(""); setUseStatic(false);
+      setCurrent(c); setUseStatic(false);
       if (c.status === "upcoming" && c.secondsToStart) setCountdown(c.secondsToStart);
       const video = videoRef.current;
       if (!video || !c.videoUrl) { setIsSyncing(false); return; }
       if (currentUrlRef.current !== c.videoUrl) {
-        currentUrlRef.current = c.videoUrl;
-        video.pause();
+        currentUrlRef.current = c.videoUrl; video.pause();
         video.addEventListener("loadedmetadata", () => {
           video.currentTime = Math.max(c.seekOffset || 0, 0);
           video.play().catch(() => { video.muted = true; setMuted(true); video.play().catch(() => {}); });
         }, { once: true });
         video.src = c.videoUrl; video.load();
       } else {
-        const diff = Math.abs(video.currentTime - (c.seekOffset || 0));
-        if (diff > 5) video.currentTime = c.seekOffset || 0;
+        if (Math.abs(video.currentTime - (c.seekOffset || 0)) > 5) video.currentTime = c.seekOffset || 0;
       }
-    } catch {
-      setUseStatic(true);
-    } finally {
-      setLoading(false); setIsSyncing(false);
-    }
+    } catch { setUseStatic(true); }
+    finally { setLoading(false); setIsSyncing(false); }
   }, []);
 
   useEffect(() => { fetchAndSync(); const t = setInterval(fetchAndSync, 60000); return () => clearInterval(t); }, [fetchAndSync]);
@@ -120,19 +84,10 @@ export default function AoVivo() {
     return () => clearInterval(t);
   }, [countdown, fetchAndSync]);
 
-  // Fetch contagem online via polling leve
   useEffect(() => {
     if (!current?.topicoId) return;
-    const poll = async () => {
-      try {
-        const r = await fetch(`${CHAT_URL}/online/${current.topicoId}`);
-        const d = await r.json();
-        if (d.count !== undefined) setOnlineCount(d.count);
-      } catch {}
-    };
-    poll();
-    const t = setInterval(poll, 15000);
-    return () => clearInterval(t);
+    const poll = async () => { try { const r = await fetch(`${CHAT_URL}/online/${current.topicoId}`); const d = await r.json(); if (d.count !== undefined) setOnlineCount(d.count); } catch {} };
+    poll(); const t = setInterval(poll, 15000); return () => clearInterval(t);
   }, [current?.topicoId]);
 
   const pad = (n: number) => String(n).padStart(2, "0");
@@ -142,45 +97,38 @@ export default function AoVivo() {
     <div className="ao-vivo-page">
       {/* Header */}
       <header className="av-header">
-        <span className="av-logo">📺 Empire TV</span>
+        <div className="av-logo"><img src={LOGO} alt="Empire TV" /></div>
         <div className="av-header-right">
           {onlineCount > 0 && <span className="av-online">👁 {onlineCount}</span>}
-          {current?.topicoId && (
-            <button className="av-chat-btn" onClick={() => setShowChat(v => !v)}>
-              {showChat ? "✕ Chat" : "💬 Chat"}
-            </button>
-          )}
         </div>
       </header>
 
-      {/* Mudo alert */}
+      {/* Mudo */}
       {muted && (
         <div className="av-muted-bar" onClick={() => { const v = videoRef.current; if (v) { v.muted = false; setMuted(false); v.play().catch(()=>{}); } }}>
-          🔇 Áudio mutado — toque aqui para ativar o som
+          🔇 Áudio mutado — toque para ativar o som
         </div>
       )}
 
       {/* Player */}
       <div className="av-player-wrap">
-        {loading && <div className="av-overlay"><p className="av-loading">📡 Sintonizando...</p></div>}
+        {loading && <div className="av-overlay"><p className="av-loading">Sintonizando…</p></div>}
 
-        {/* Countdown */}
         {current?.status === "upcoming" && !loading && (
           <div className="av-overlay av-countdown">
-            <span className="av-countdown-label">📺 Próxima Atração</span>
+            <span className="av-countdown-label">Próxima atração</span>
             <h2 className="av-countdown-title">{current.programa}</h2>
             {current.tipo && <span className="av-badge">{current.tipo}</span>}
             <div className="av-timer">{countdown !== null ? fmtCountdown(countdown) : "--:--:--"}</div>
           </div>
         )}
 
-        {/* Estática */}
         {useStatic && (
-          <div className="av-overlay av-static-wrap">
+          <div className="av-overlay">
             <canvas ref={staticCanvasRef} className="av-static-canvas" />
             <div className="av-static-card">
-              <span className="av-static-title">🚨 Sem Sinal</span>
-              <p>Sem transmissão no momento.</p>
+              <span className="av-static-title">Sem Sinal</span>
+              <p>Nenhuma transmissão no momento.</p>
               <button onClick={fetchAndSync} disabled={isSyncing} className="av-sync-btn">
                 {isSyncing ? "⚡ Sincronizando..." : "🔄 Re-sintonizar"}
               </button>
@@ -189,10 +137,7 @@ export default function AoVivo() {
         )}
 
         <video
-          ref={videoRef}
-          controls
-          playsInline
-          className="av-video"
+          ref={videoRef} controls playsInline className="av-video"
           onEnded={fetchAndSync}
           onError={() => {
             const v = videoRef.current;
@@ -227,8 +172,8 @@ export default function AoVivo() {
         </div>
       )}
 
-      {/* Chat drawer */}
-      {showChat && current?.topicoId && (
+      {/* Chat — sempre visível quando há topicoId */}
+      {current?.topicoId && (
         <Chat roomId={current.topicoId} backendUrl={CHAT_URL} />
       )}
     </div>
