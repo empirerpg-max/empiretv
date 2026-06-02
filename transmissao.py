@@ -10,6 +10,8 @@ import requests
 
 TZ_SP = pytz.timezone("America/Sao_Paulo")
 
+MODO_TESTE = "--teste" in sys.argv
+
 def log(msg):
     print(f"[{datetime.now(TZ_SP).strftime('%H:%M:%S')}] {msg}", flush=True)
 
@@ -38,8 +40,34 @@ def get_pending_videos(sheet):
     headers = [re.sub(r'^[A-Z]\s*[—-]\s*', '', h).strip() for h in raw_data[0]]
     records = [dict(zip(headers, row)) for row in raw_data[1:]]
     now = datetime.now(TZ_SP)
-    videos = []
-    grade_iniciada = False
+
+    # ── MODO TESTE: pega todas as linhas pendentes sem validar horário ──
+    if MODO_TESTE:
+        log("*** MODO TESTE ATIVO — ignorando validação de data/hora ***")
+        videos = []
+        for idx, r in enumerate(records):
+            status = str(r.get("Status", "")).strip().lower()
+            if status in ("finalizado", "transmitindo", "falha"):
+                continue
+            drive_raw = str(r.get("Drive_ID") or r.get("Drive_Video_ID") or "").strip()
+            drive_id = extract_drive_id(drive_raw)
+            try:
+                duracao = int(str(r.get("Duracao_Seg") or r.get("Duracao_Segundos") or "0").strip())
+            except ValueError:
+                duracao = 0
+            if not drive_id or duracao <= 0:
+                log(f"Linha {idx+2} ignorada: Drive_ID ou Duracao_Seg ausente/inválido.")
+                continue
+            programa = str(r.get("Programa", "Empire TV")).strip()
+            data_str = str(r.get("Data", "")).strip()
+            horario  = str(r.get("Horario", "")).strip()
+            videos.append({"row": idx+2, "drive_id": drive_id, "programa": programa,
+                           "duracao": duracao, "horario": f"{data_str} {horario}".strip()})
+        return videos
+
+    # ── MODO AUTOMÁTICO: agrupa por Programa + Data + Horário de início ──
+    # Passo 1: coleta todos os candidatos com horário já atingido
+    candidatos = []
     for idx, r in enumerate(records):
         status = str(r.get("Status", "")).strip().lower()
         if status in ("finalizado", "transmitindo", "falha"):
@@ -56,21 +84,40 @@ def get_pending_videos(sheet):
         if not drive_id or duracao <= 0:
             log(f"Linha {idx+2} ignorada: Drive_ID ou Duracao_Seg ausente/inválido.")
             continue
-        if horario:
-            sched = parse_datetime(data_str, horario, now)
-            if sched and now >= sched:
-                grade_iniciada = True
-                videos.append({"row": idx+2, "drive_id": drive_id, "programa": programa, "duracao": duracao, "horario": f"{data_str} {horario}".strip()})
-            elif sched and now < sched:
-                log(f"Linha {idx+2} ({programa}) agendada para {data_str} {horario} — ainda não chegou.")
-            else:
-                log(f"Linha {idx+2} ({programa}) com data/hora inválida: '{data_str} {horario}' — ignorando.")
+        if not horario:
+            log(f"Linha {idx+2} ({programa}) sem horário — ignorando.")
+            continue
+        sched = parse_datetime(data_str, horario, now)
+        if not sched:
+            log(f"Linha {idx+2} ({programa}) com data/hora inválida: '{data_str} {horario}' — ignorando.")
+            continue
+        if now >= sched:
+            candidatos.append({"row": idx+2, "drive_id": drive_id, "programa": programa,
+                               "duracao": duracao, "data_str": data_str, "horario": horario,
+                               "sched": sched})
         else:
-            if grade_iniciada:
-                videos.append({"row": idx+2, "drive_id": drive_id, "programa": programa, "duracao": duracao, "horario": "(encadeado)"})
-            else:
-                log(f"Linha {idx+2} ({programa}) sem horário e grade não iniciou — ignorando.")
-    return videos
+            log(f"Linha {idx+2} ({programa}) agendada para {data_str} {horario} — ainda não chegou.")
+
+    if not candidatos:
+        return []
+
+    # Passo 2: identifica o grupo ativo = menor sched entre os candidatos
+    sched_mais_cedo = min(c["sched"] for c in candidatos)
+    programa_ativo  = next(c["programa"] for c in candidatos if c["sched"] == sched_mais_cedo)
+
+    log(f"Grupo ativo: '{programa_ativo}' — início {sched_mais_cedo.strftime('%d/%m/%Y %H:%M')}")
+
+    # Passo 3: retorna apenas as linhas desse grupo (mesmo Programa + mesma Data + mesmo Horário)
+    grupo = [
+        {"row": c["row"], "drive_id": c["drive_id"], "programa": c["programa"],
+         "duracao": c["duracao"], "horario": f"{c['data_str']} {c['horario']}".strip()}
+        for c in candidatos
+        if c["programa"] == programa_ativo and c["sched"] == sched_mais_cedo
+    ]
+
+    # Mantém a ordem original da planilha (row number)
+    grupo.sort(key=lambda x: x["row"])
+    return grupo
 
 def parse_datetime(data_str, horario_str, now):
     combined = f"{data_str} {horario_str}".strip() if data_str else horario_str.strip()
@@ -272,6 +319,11 @@ def update_status(sheet, rows, status):
 
 def main():
     log("=== EMPIRE TV — INICIANDO TRANSMISSÃO ===")
+    if MODO_TESTE:
+        log("=== MODO: TESTE MANUAL ===")
+    else:
+        log("=== MODO: AUTOMÁTICO (agendado) ===")
+
     spreadsheet_id = os.environ.get("SPREADSHEET_ID")
     rtmp_url = os.environ.get("RTMP_URL")
     rtmp_key = os.environ.get("RTMP_KEY")
