@@ -9,13 +9,30 @@ interface Programa {
   capaUrl?: string; topicoUrl?: string;
 }
 
+// Gera chave "DD/MM/YYYY" a partir de um Date local
 function toKey(d: Date) {
-  return `${String(d.getDate()).padStart(2,"0")}/${String(d.getMonth()+1).padStart(2,"0")}/${d.getFullYear()}`;
+  return [
+    String(d.getDate()).padStart(2, "0"),
+    String(d.getMonth() + 1).padStart(2, "0"),
+    d.getFullYear(),
+  ].join("/");
 }
 function hojeKey() { return toKey(new Date()); }
 function parseKey(key: string): Date {
   const [dd, mm, yyyy] = key.split("/");
   return new Date(+yyyy, +mm - 1, +dd);
+}
+
+// Normaliza qualquer formato de data p/ "DD/MM/YYYY"
+function normalizeData(raw: string | undefined): string {
+  if (!raw) return "";
+  const s = raw.trim();
+  // já está em DD/MM/YYYY
+  if (/^\d{2}\/\d{2}\/\d{4}$/.test(s)) return s;
+  // ISO: 2026-06-02 ou 2026-06-02T...
+  const iso = s.match(/^(\d{4})-(\d{2})-(\d{2})/);
+  if (iso) return `${iso[3]}/${iso[2]}/${iso[1]}`;
+  return s;
 }
 
 const SEMANA = ["Dom","Seg","Ter","Qua","Qui","Sex","Sáb"];
@@ -26,22 +43,32 @@ export default function Grade() {
   const [items,   setItems]   = useState<Programa[]>([]);
   const [loading, setLoading] = useState(true);
   const [erro,    setErro]    = useState("");
+  const [rawDebug, setRawDebug] = useState<string>("");
   const [diaSel,  setDiaSel]  = useState(hojeKey());
   const hoje = new Date();
-  const [mesVis, setMesVis]   = useState({ year: hoje.getFullYear(), month: hoje.getMonth() });
+  const [mesVis, setMesVis] = useState({ year: hoje.getFullYear(), month: hoje.getMonth() });
 
   useEffect(() => {
     fetchGAS()
-      .then(d => setItems(d.fullSchedule || []))
-      .catch(() => setErro("Erro ao carregar a grade."))
+      .then(d => {
+        const schedule: Programa[] = (d.fullSchedule || []).map((p: Programa) => ({
+          ...p,
+          data: normalizeData(p.data),
+        }));
+        setItems(schedule);
+        // debug: mostra as primeiras datas recebidas
+        const sample = (d.fullSchedule || []).slice(0, 3).map((p: any) => `"${p.data}" ${p.programa}`);
+        setRawDebug(sample.join(" | ") || "(vazio)");
+      })
+      .catch(e => setErro("Erro: " + String(e)))
       .finally(() => setLoading(false));
   }, []);
 
   const diasDoMes = useMemo(() => {
     const { year, month } = mesVis;
+    const cells: (Date | null)[] = [];
     const primeiro = new Date(year, month, 1);
     const ultimo   = new Date(year, month + 1, 0);
-    const cells: (Date | null)[] = [];
     for (let i = 0; i < primeiro.getDay(); i++) cells.push(null);
     for (let d = 1; d <= ultimo.getDate(); d++) cells.push(new Date(year, month, d));
     return cells;
@@ -49,73 +76,62 @@ export default function Grade() {
 
   const diasComEvento = useMemo(() => {
     const set = new Set<string>();
-    items.forEach(p => { if (p.data) set.add(p.data.trim()); });
+    items.forEach(p => { if (p.data) set.add(p.data); });
     return set;
   }, [items]);
 
-  const itensDia = useMemo(() => {
-    return items
-      .filter(p => String(p.data || "").trim() === diaSel)
-      .sort((a, b) => (a.horarioStr || "").localeCompare(b.horarioStr || ""));
-  }, [items, diaSel]);
+  const itensDia = useMemo(() =>
+    items
+      .filter(p => p.data === diaSel)
+      .sort((a, b) => (a.horarioStr || "").localeCompare(b.horarioStr || ""))
+  , [items, diaSel]);
 
   const now = new Date();
   const nowSecs = now.getHours() * 3600 + now.getMinutes() * 60;
 
-  function prevMes() {
-    setMesVis(p => p.month === 0
-      ? { year: p.year - 1, month: 11 }
-      : { year: p.year, month: p.month - 1 });
-  }
-  function nextMes() {
-    setMesVis(p => p.month === 11
-      ? { year: p.year + 1, month: 0 }
-      : { year: p.year, month: p.month + 1 });
-  }
-
-  const dataSel = parseKey(diaSel);
-  const labelDia = diaSel === hojeKey()
-    ? "Hoje"
-    : diaSel === toKey(new Date(hoje.getFullYear(), hoje.getMonth(), hoje.getDate() + 1))
-    ? "Amanhã"
+  const dataSel  = parseKey(diaSel);
+  const labelDia = diaSel === hojeKey() ? "Hoje"
+    : diaSel === toKey(new Date(hoje.getFullYear(), hoje.getMonth(), hoje.getDate() + 1)) ? "Amanhã"
     : `${SEMANA[dataSel.getDay()]}, ${dataSel.getDate()} de ${MESES[dataSel.getMonth()]}`;
 
   return (
     <div className="grade-page">
       <h1 className="grade-title">Grade de Programação</h1>
 
-      {/* ── Calendário mensal ── */}
+      {/* DEBUG — remover depois de confirmar que funciona */}
+      {rawDebug && (
+        <div style={{ background: "#1a1a2e", color: "#a470f0", fontSize: 10, padding: "6px 12px", margin: "0 0 8px", borderRadius: 8, wordBreak: "break-all" }}>
+          🔍 GAS: {rawDebug} | hoje={hojeKey()}
+        </div>
+      )}
+
+      {/* Calendário */}
       <div className="grade-cal-card">
         <div className="grade-cal-header">
-          <button className="grade-cal-nav" onClick={prevMes}>‹</button>
+          <button className="grade-cal-nav" onClick={() => setMesVis(p => p.month === 0 ? { year: p.year-1, month: 11 } : { ...p, month: p.month-1 })}>‹</button>
           <span className="grade-cal-mes">{MESES[mesVis.month]} {mesVis.year}</span>
-          <button className="grade-cal-nav" onClick={nextMes}>›</button>
+          <button className="grade-cal-nav" onClick={() => setMesVis(p => p.month === 11 ? { year: p.year+1, month: 0 } : { ...p, month: p.month+1 })}>›</button>
         </div>
-        <div className="grade-cal-semana">
-          {SEMANA.map(s => <span key={s}>{s}</span>)}
-        </div>
+        <div className="grade-cal-semana">{SEMANA.map(s => <span key={s}>{s}</span>)}</div>
         <div className="grade-cal-grid">
           {diasDoMes.map((d, i) => {
             if (!d) return <div key={`e${i}`} className="grade-cal-cell empty" />;
-            const key       = toKey(d);
-            const isHoje    = key === hojeKey();
-            const isSel     = key === diaSel;
-            const temEvento = diasComEvento.has(key);
+            const key = toKey(d);
             return (
               <button
                 key={key}
-                className={`grade-cal-cell ${isSel ? "sel" : isHoje ? "hoje" : ""} ${temEvento ? "tem-evento" : ""}`}
+                className={`grade-cal-cell ${key === diaSel ? "sel" : key === hojeKey() ? "hoje" : ""} ${diasComEvento.has(key) ? "tem-evento" : ""}`}
                 onClick={() => setDiaSel(key)}
               >
                 <span>{d.getDate()}</span>
-                {temEvento && <span className="grade-cal-dot" />}
+                {diasComEvento.has(key) && <span className="grade-cal-dot" />}
               </button>
             );
           })}
         </div>
       </div>
 
-      {/* ── Cabeçalho do dia ── */}
+      {/* Cabeçalho do dia */}
       <div className="grade-dia-header">
         <span className="grade-dia-label">{labelDia}</span>
         <span className="grade-dia-count">{itensDia.length} programa{itensDia.length !== 1 ? "s" : ""}</span>
@@ -125,33 +141,28 @@ export default function Grade() {
       {erro    && <div className="grade-erro">{erro}</div>}
 
       <AnimatePresence mode="wait">
-        <motion.div
-          key={diaSel}
-          initial={{ opacity: 0, y: 14 }}
-          animate={{ opacity: 1, y: 0 }}
-          exit={{ opacity: 0, y: -8 }}
-          transition={{ duration: 0.22 }}
+        <motion.div key={diaSel}
+          initial={{ opacity: 0, y: 14 }} animate={{ opacity: 1, y: 0 }}
+          exit={{ opacity: 0, y: -8 }} transition={{ duration: 0.22 }}
         >
           {!loading && !erro && itensDia.length === 0 && (
             <div className="grade-vazia">
               <span style={{ fontSize: 40 }}>📭</span>
               <p>Sem programas para este dia.</p>
+              <p style={{ fontSize: 11, color: "#6b6585", marginTop: 4 }}>Selecione outro dia no calendário acima.</p>
             </div>
           )}
 
           <div className="grade-cards">
             {itensDia.map((p, i) => {
-              const hParts   = (p.horarioStr || "").split(":");
-              const hSecs    = hParts.length >= 2 ? +hParts[0] * 3600 + +hParts[1] * 60 : null;
-              const isAoVivo  = diaSel === hojeKey() && hSecs !== null && nowSecs >= hSecs && nowSecs < hSecs + 7200;
-              const isPassado = diaSel === hojeKey() && hSecs !== null && nowSecs >= hSecs + 7200;
-
+              const hParts  = (p.horarioStr || "").split(":");
+              const hSecs   = hParts.length >= 2 ? +hParts[0]*3600 + +hParts[1]*60 : null;
+              const isLive  = diaSel === hojeKey() && hSecs !== null && nowSecs >= hSecs && nowSecs < hSecs + 7200;
+              const isPast  = diaSel === hojeKey() && hSecs !== null && nowSecs >= hSecs + 7200;
               return (
-                <motion.div
-                  key={i}
-                  className={`grade-card ${isAoVivo ? "ao-vivo" : isPassado ? "passado" : ""}`}
-                  initial={{ opacity: 0, y: 16 }}
-                  animate={{ opacity: 1, y: 0 }}
+                <motion.div key={i}
+                  className={`grade-card ${isLive ? "ao-vivo" : isPast ? "passado" : ""}`}
+                  initial={{ opacity: 0, y: 16 }} animate={{ opacity: 1, y: 0 }}
                   transition={{ duration: 0.24, delay: i * 0.05 }}
                   whileHover={{ y: -3, transition: { type: "spring", stiffness: 300, damping: 20 } }}
                   onClick={() => { if (p.topicoUrl) window.open(p.topicoUrl, "_blank"); }}
@@ -161,8 +172,8 @@ export default function Grade() {
                     {p.capaUrl
                       ? <img src={p.capaUrl} alt={p.programa} />
                       : <div className="grade-card-thumb-placeholder">📺</div>}
-                    {isAoVivo  && <span className="grade-card-live">● AO VIVO</span>}
-                    {isPassado && <span className="grade-card-ended">Encerrado</span>}
+                    {isLive && <span className="grade-card-live">● AO VIVO</span>}
+                    {isPast && <span className="grade-card-ended">Encerrado</span>}
                   </div>
                   <div className="grade-card-info">
                     <span className="grade-card-horario">{p.horarioStr || "—"}</span>
