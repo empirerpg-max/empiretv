@@ -9,7 +9,6 @@ interface Programa {
   capaUrl?: string; topicoUrl?: string;
 }
 
-// Gera chave "DD/MM/YYYY" a partir de um Date local
 function toKey(d: Date) {
   return [
     String(d.getDate()).padStart(2, "0"),
@@ -22,14 +21,10 @@ function parseKey(key: string): Date {
   const [dd, mm, yyyy] = key.split("/");
   return new Date(+yyyy, +mm - 1, +dd);
 }
-
-// Normaliza qualquer formato de data p/ "DD/MM/YYYY"
 function normalizeData(raw: string | undefined): string {
   if (!raw) return "";
   const s = raw.trim();
-  // já está em DD/MM/YYYY
   if (/^\d{2}\/\d{2}\/\d{4}$/.test(s)) return s;
-  // ISO: 2026-06-02 ou 2026-06-02T...
   const iso = s.match(/^(\d{4})-(\d{2})-(\d{2})/);
   if (iso) return `${iso[3]}/${iso[2]}/${iso[1]}`;
   return s;
@@ -40,27 +35,32 @@ const MESES  = ["Janeiro","Fevereiro","Março","Abril","Maio","Junho",
                 "Julho","Agosto","Setembro","Outubro","Novembro","Dezembro"];
 
 export default function Grade() {
-  const [items,   setItems]   = useState<Programa[]>([]);
-  const [loading, setLoading] = useState(true);
-  const [erro,    setErro]    = useState("");
-  const [rawDebug, setRawDebug] = useState<string>("");
-  const [diaSel,  setDiaSel]  = useState(hojeKey());
+  const [items,    setItems]    = useState<Programa[]>([]);
+  const [loading,  setLoading]  = useState(true);
+  const [erro,     setErro]     = useState("");
+  const [debug,    setDebug]    = useState("aguardando...");
+  const [diaSel,   setDiaSel]   = useState(hojeKey());
   const hoje = new Date();
   const [mesVis, setMesVis] = useState({ year: hoje.getFullYear(), month: hoje.getMonth() });
 
   useEffect(() => {
     fetchGAS()
       .then(d => {
-        const schedule: Programa[] = (d.fullSchedule || []).map((p: Programa) => ({
+        const raw = d.fullSchedule || [];
+        const schedule: Programa[] = raw.map((p: Programa) => ({
           ...p,
           data: normalizeData(p.data),
         }));
         setItems(schedule);
-        // debug: mostra as primeiras datas recebidas
-        const sample = (d.fullSchedule || []).slice(0, 3).map((p: any) => `"${p.data}" ${p.programa}`);
-        setRawDebug(sample.join(" | ") || "(vazio)");
+        setDebug(
+          `status=${d.status ?? "?"} | count=${raw.length} | hoje=${hojeKey()}` +
+          (raw[0] ? ` | primeiro: "${raw[0].data}" ${raw[0].programa}` : " | (vazio)")
+        );
       })
-      .catch(e => setErro("Erro: " + String(e)))
+      .catch(e => {
+        setErro("Erro: " + String(e));
+        setDebug("ERRO: " + String(e));
+      })
       .finally(() => setLoading(false));
   }, []);
 
@@ -88,7 +88,6 @@ export default function Grade() {
 
   const now = new Date();
   const nowSecs = now.getHours() * 3600 + now.getMinutes() * 60;
-
   const dataSel  = parseKey(diaSel);
   const labelDia = diaSel === hojeKey() ? "Hoje"
     : diaSel === toKey(new Date(hoje.getFullYear(), hoje.getMonth(), hoje.getDate() + 1)) ? "Amanhã"
@@ -98,14 +97,11 @@ export default function Grade() {
     <div className="grade-page">
       <h1 className="grade-title">Grade de Programação</h1>
 
-      {/* DEBUG — remover depois de confirmar que funciona */}
-      {rawDebug && (
-        <div style={{ background: "#1a1a2e", color: "#a470f0", fontSize: 10, padding: "6px 12px", margin: "0 0 8px", borderRadius: 8, wordBreak: "break-all" }}>
-          🔍 GAS: {rawDebug} | hoje={hojeKey()}
-        </div>
-      )}
+      {/* DEBUG sempre visível */}
+      <div style={{ background: "#1a1a2e", color: "#a470f0", fontSize: 10, padding: "6px 12px", margin: "0 0 8px", borderRadius: 8, wordBreak: "break-all" }}>
+        🔍 {debug}
+      </div>
 
-      {/* Calendário */}
       <div className="grade-cal-card">
         <div className="grade-cal-header">
           <button className="grade-cal-nav" onClick={() => setMesVis(p => p.month === 0 ? { year: p.year-1, month: 11 } : { ...p, month: p.month-1 })}>‹</button>
@@ -131,7 +127,6 @@ export default function Grade() {
         </div>
       </div>
 
-      {/* Cabeçalho do dia */}
       <div className="grade-dia-header">
         <span className="grade-dia-label">{labelDia}</span>
         <span className="grade-dia-count">{itensDia.length} programa{itensDia.length !== 1 ? "s" : ""}</span>
@@ -152,13 +147,12 @@ export default function Grade() {
               <p style={{ fontSize: 11, color: "#6b6585", marginTop: 4 }}>Selecione outro dia no calendário acima.</p>
             </div>
           )}
-
           <div className="grade-cards">
             {itensDia.map((p, i) => {
-              const hParts  = (p.horarioStr || "").split(":");
-              const hSecs   = hParts.length >= 2 ? +hParts[0]*3600 + +hParts[1]*60 : null;
-              const isLive  = diaSel === hojeKey() && hSecs !== null && nowSecs >= hSecs && nowSecs < hSecs + 7200;
-              const isPast  = diaSel === hojeKey() && hSecs !== null && nowSecs >= hSecs + 7200;
+              const hParts = (p.horarioStr || "").split(":");
+              const hSecs  = hParts.length >= 2 ? +hParts[0]*3600 + +hParts[1]*60 : null;
+              const isLive = diaSel === hojeKey() && hSecs !== null && nowSecs >= hSecs && nowSecs < hSecs + 7200;
+              const isPast = diaSel === hojeKey() && hSecs !== null && nowSecs >= hSecs + 7200;
               return (
                 <motion.div key={i}
                   className={`grade-card ${isLive ? "ao-vivo" : isPast ? "passado" : ""}`}
