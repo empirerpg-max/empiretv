@@ -5,11 +5,8 @@
 //          Capa_URL | Status | Topico_ID | Topico_URL
 // ============================================================
 
-// ── Configuração ─────────────────────────────────────────────
 const SHEET_NAME     = "Agenda_TV";
-const SPREADSHEET_ID = ""; // deixe vazio para usar a planilha ativa
-
-// ── Utilitários ──────────────────────────────────────────────
+const SPREADSHEET_ID = "";
 
 function getSheet() {
   const ss = SPREADSHEET_ID
@@ -41,38 +38,63 @@ function nowSaoPaulo() {
   return new Date(now.toLocaleString("en-US", { timeZone: "America/Sao_Paulo" }));
 }
 
+// Statuses que devem ser ignorados (já encerrados)
+const SKIP_STATUSES = ["concluido","concluído","finalizado","cancelado","transmitido"];
+
 function parseDataHora(dataVal, horarioVal) {
   try {
-    let dateStr = "";
+    // ── PARTE 1: extrair data ──
+    let year, month, day;
+
     if (dataVal instanceof Date) {
-      const local = new Date(dataVal.toLocaleString("en-US", { timeZone: "America/Sao_Paulo" }));
-      const y = local.getFullYear();
-      const m = String(local.getMonth() + 1).padStart(2, "0");
-      const d = String(local.getDate()).padStart(2, "0");
-      dateStr = `${y}-${m}-${d}`;
+      // Objeto Date do Sheets — usa UTC pois o Sheets armazena como meia-noite UTC
+      year  = dataVal.getUTCFullYear();
+      month = dataVal.getUTCMonth() + 1;
+      day   = dataVal.getUTCDate();
     } else {
       const s = String(dataVal).trim();
-      if (/^\d{4}-\d{2}-\d{2}/.test(s)) {
-        dateStr = s.substring(0, 10);
-      } else if (/^\d{2}\/\d{2}\/\d{4}/.test(s)) {
-        const p = s.split("/");
-        dateStr = `${p[2]}-${p[1]}-${p[0]}`;
+      // ISO: 2026-05-27T03:00:00.000Z
+      const isoM = s.match(/^(\d{4})-(\d{2})-(\d{2})/);
+      if (isoM) {
+        year = parseInt(isoM[1]); month = parseInt(isoM[2]); day = parseInt(isoM[3]);
       } else {
-        return null;
+        // dd/MM/yyyy
+        const brM = s.match(/^(\d{2})\/(\d{2})\/(\d{4})/);
+        if (brM) {
+          day = parseInt(brM[1]); month = parseInt(brM[2]); year = parseInt(brM[3]);
+        } else {
+          return null;
+        }
       }
     }
 
-    let timeStr = "00:00:00";
+    // ── PARTE 2: extrair hora ──
+    let hh = 0, mm = 0, ss = 0;
+
     if (horarioVal instanceof Date) {
-      const local = new Date(horarioVal.toLocaleString("en-US", { timeZone: "America/Sao_Paulo" }));
-      timeStr = `${String(local.getHours()).padStart(2,"0")}:${String(local.getMinutes()).padStart(2,"0")}:${String(local.getSeconds()).padStart(2,"0")}`;
+      // Objeto Date do Sheets para hora: pode vir como 1899-12-30T23:06:28.000Z
+      // A hora real está nos componentes UTC
+      hh = horarioVal.getUTCHours();
+      mm = horarioVal.getUTCMinutes();
+      ss = horarioVal.getUTCSeconds();
     } else {
       const s = String(horarioVal).trim();
-      const m = s.match(/^(\d{1,2}):(\d{2})(?::(\d{2}))?/);
-      if (m) timeStr = `${m[1].padStart(2,"0")}:${m[2]}:${m[3] ? m[3] : "00"}`;
+      // ISO com T: 1899-12-30T23:06:28.000Z — pega após o T
+      const isoT = s.match(/T(\d{2}):(\d{2}):(\d{2})/);
+      if (isoT) {
+        hh = parseInt(isoT[1]); mm = parseInt(isoT[2]); ss = parseInt(isoT[3]);
+      } else {
+        // HH:MM ou HH:MM:SS
+        const timeM = s.match(/^(\d{1,2}):(\d{2})(?::(\d{2}))?/);
+        if (timeM) {
+          hh = parseInt(timeM[1]); mm = parseInt(timeM[2]); ss = timeM[3] ? parseInt(timeM[3]) : 0;
+        }
+      }
     }
 
-    return new Date(`${dateStr}T${timeStr}-03:00`);
+    // Monta o Date em Brasília
+    const iso = `${year}-${String(month).padStart(2,"0")}-${String(day).padStart(2,"0")}T${String(hh).padStart(2,"0")}:${String(mm).padStart(2,"0")}:${String(ss).padStart(2,"0")}-03:00`;
+    return new Date(iso);
   } catch(e) {
     return null;
   }
@@ -90,8 +112,6 @@ function jsonpResp(callback, data) {
     .setMimeType(ContentService.MimeType.JAVASCRIPT);
 }
 
-// ── doGet ─────────────────────────────────────────────────────
-
 function doGet(e) {
   const callback = e && e.parameter && e.parameter.callback;
   try {
@@ -103,18 +123,12 @@ function doGet(e) {
   }
 }
 
-// ── Payload principal ─────────────────────────────────────────
-
 function buildPayload() {
   const sheet = getSheet();
   const rows  = sheet.getDataRange().getValues();
 
   if (rows.length <= 1) {
-    return {
-      status: "ok",
-      current: { status: "off", programa: "Empire TV" },
-      fullSchedule: []
-    };
+    return { status: "ok", current: { status: "off", programa: "Empire TV" }, fullSchedule: [] };
   }
 
   const headers = rows[0].map(h => String(h).trim());
@@ -136,7 +150,8 @@ function buildPayload() {
 
   dataRows.forEach((row, idx) => {
     const rowStatus = String(row[iStatus] || "").trim().toLowerCase();
-    if (["concluido","concluído","cancelado"].includes(rowStatus)) return;
+    // Ignora qualquer status de encerrado
+    if (SKIP_STATUSES.includes(rowStatus)) return;
 
     const dataVal    = iData    >= 0 ? row[iData]    : "";
     const horarioVal = iHorario >= 0 ? row[iHorario] : "";
@@ -145,14 +160,14 @@ function buildPayload() {
 
     schedule.push({
       rowNum:    idx + 2,
-      startDt:  startDt,
-      programa: String(row[iPrograma]  || "Empire TV").trim(),
-      tipo:     String(row[iTipo]      || "").trim(),
-      material: String(row[iMaterial]  || "").trim(),
-      buff:     String(row[iBuff]      || "").trim(),
-      capaUrl:  String(row[iCapa]      || "").trim(),
-      topicoId: String(row[iTopicoId]  || "").trim(),
-      topicoUrl:String(row[iTopicoUrl] || "").trim()
+      startDt:   startDt,
+      programa:  String(row[iPrograma]  || "Empire TV").trim(),
+      tipo:      String(row[iTipo]      || "").trim(),
+      material:  String(row[iMaterial]  || "").trim(),
+      buff:      String(row[iBuff]      || "").trim(),
+      capaUrl:   String(row[iCapa]      || "").trim(),
+      topicoId:  String(row[iTopicoId]  || "").trim(),
+      topicoUrl: String(row[iTopicoUrl] || "").trim()
     });
   });
 
@@ -177,7 +192,7 @@ function buildPayload() {
         break;
       } else {
         if (iStatus >= 0) {
-          try { sheet.getRange(item.rowNum, iStatus + 1).setValue("Concluido"); } catch(e){}
+          try { sheet.getRange(item.rowNum, iStatus + 1).setValue("Finalizado"); } catch(e){}
         }
       }
     } else {
@@ -190,11 +205,12 @@ function buildPayload() {
 
   if (!current) current = { status: "off", programa: "Empire TV" };
 
-  // fullSchedule — usa horarioStr para bater com home.tsx e grade.tsx
+  const fmt = (dt, pattern) => Utilities.formatDate(dt, "America/Sao_Paulo", pattern);
+
   const fullSchedule = schedule.map(item => ({
     rowNum:     item.rowNum,
-    horarioStr: Utilities.formatDate(item.startDt, "America/Sao_Paulo", "HH:mm"),
-    data:       Utilities.formatDate(item.startDt, "America/Sao_Paulo", "dd/MM/yyyy"),
+    horarioStr: fmt(item.startDt, "HH:mm"),
+    data:       fmt(item.startDt, "dd/MM/yyyy"),
     programa:   item.programa,
     tipo:       item.tipo,
     material:   item.material,
@@ -204,7 +220,6 @@ function buildPayload() {
     topicoUrl:  item.topicoUrl
   }));
 
-  // current — usa horarioStr também
   const currentOut = current.status === "off"
     ? { status: "off", programa: "Empire TV" }
     : {
@@ -216,8 +231,8 @@ function buildPayload() {
         capaUrl:        current.capaUrl,
         topicoId:       current.topicoId   || "",
         topicoUrl:      current.topicoUrl  || "",
-        horarioStr:     Utilities.formatDate(current.startDt, "America/Sao_Paulo", "HH:mm"),
-        data:           Utilities.formatDate(current.startDt, "America/Sao_Paulo", "dd/MM/yyyy"),
+        horarioStr:     fmt(current.startDt, "HH:mm"),
+        data:           fmt(current.startDt, "dd/MM/yyyy"),
         videoUrl:       "",
         seekOffset:     current.seekOffset     || 0,
         secondsToStart: current.secondsToStart || 0
@@ -229,4 +244,18 @@ function buildPayload() {
     current:      currentOut,
     fullSchedule: fullSchedule
   };
+}
+
+// ── Debug ─────────────────────────────────────────────────────
+function debug() {
+  const ss = SpreadsheetApp.getActiveSpreadsheet();
+  Logger.log("Abas: " + ss.getSheets().map(s => s.getName()).join(", "));
+  const sheet = ss.getSheetByName(SHEET_NAME);
+  if (!sheet) { Logger.log("ERRO: aba " + SHEET_NAME + " não encontrada!"); return; }
+  const rows = sheet.getDataRange().getValues();
+  Logger.log("Total de linhas: " + rows.length);
+  Logger.log("Cabeçalhos: " + JSON.stringify(rows[0]));
+  if (rows[1]) Logger.log("Linha 2 (raw): " + JSON.stringify(rows[1]));
+  if (rows[2]) Logger.log("Linha 3 (raw): " + JSON.stringify(rows[2]));
+  Logger.log("Payload: " + JSON.stringify(buildPayload()));
 }
