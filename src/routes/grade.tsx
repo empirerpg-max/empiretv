@@ -1,6 +1,7 @@
 import { useEffect, useState, useMemo } from "react";
 import { motion, AnimatePresence } from "motion/react";
 import { fetchGAS } from "../lib/gas";
+import "../styles/grade.css";
 
 interface Programa {
   programa: string; tipo: string; material?: string;
@@ -36,7 +37,6 @@ export default function Grade() {
       .finally(() => setLoading(false));
   }, []);
 
-  // Dias do mês visível
   const diasDoMes = useMemo(() => {
     const { year, month } = mesVis;
     const primeiro = new Date(year, month, 1);
@@ -47,14 +47,12 @@ export default function Grade() {
     return cells;
   }, [mesVis]);
 
-  // Quais dias têm programas
   const diasComEvento = useMemo(() => {
     const set = new Set<string>();
     items.forEach(p => { if (p.data) set.add(p.data.trim()); });
     return set;
   }, [items]);
 
-  // Programas do dia selecionado
   const itensDia = useMemo(() => {
     return items
       .filter(p => String(p.data || "").trim() === diaSel)
@@ -76,7 +74,11 @@ export default function Grade() {
   }
 
   const dataSel = parseKey(diaSel);
-  const labelDia = diaSel === hojeKey() ? "Hoje" : diaSel === toKey(new Date(hoje.getFullYear(), hoje.getMonth(), hoje.getDate() + 1)) ? "Amanhã" : `${SEMANA[dataSel.getDay()]}, ${dataSel.getDate()} de ${MESES[dataSel.getMonth()]}`;
+  const labelDia = diaSel === hojeKey()
+    ? "Hoje"
+    : diaSel === toKey(new Date(hoje.getFullYear(), hoje.getMonth(), hoje.getDate() + 1))
+    ? "Amanhã"
+    : `${SEMANA[dataSel.getDay()]}, ${dataSel.getDate()} de ${MESES[dataSel.getMonth()]}`;
 
   return (
     <div className="grade-page">
@@ -89,27 +91,21 @@ export default function Grade() {
           <span className="grade-cal-mes">{MESES[mesVis.month]} {mesVis.year}</span>
           <button className="grade-cal-nav" onClick={nextMes}>›</button>
         </div>
-
         <div className="grade-cal-semana">
           {SEMANA.map(s => <span key={s}>{s}</span>)}
         </div>
-
         <div className="grade-cal-grid">
           {diasDoMes.map((d, i) => {
             if (!d) return <div key={`e${i}`} className="grade-cal-cell empty" />;
-            const key     = toKey(d);
-            const isHoje  = key === hojeKey();
-            const isSel   = key === diaSel;
+            const key       = toKey(d);
+            const isHoje    = key === hojeKey();
+            const isSel     = key === diaSel;
             const temEvento = diasComEvento.has(key);
             return (
               <button
                 key={key}
-                className={`grade-cal-cell ${
-                  isSel ? "sel" : isHoje ? "hoje" : ""
-                } ${temEvento ? "tem-evento" : ""}`}
-                onClick={() => {
-                  setDiaSel(key);
-                }}
+                className={`grade-cal-cell ${isSel ? "sel" : isHoje ? "hoje" : ""} ${temEvento ? "tem-evento" : ""}`}
+                onClick={() => setDiaSel(key)}
               >
                 <span>{d.getDate()}</span>
                 {temEvento && <span className="grade-cal-dot" />}
@@ -119,7 +115,7 @@ export default function Grade() {
         </div>
       </div>
 
-      {/* ── Lista do dia ── */}
+      {/* ── Cabeçalho do dia ── */}
       <div className="grade-dia-header">
         <span className="grade-dia-label">{labelDia}</span>
         <span className="grade-dia-count">{itensDia.length} programa{itensDia.length !== 1 ? "s" : ""}</span>
@@ -145,8 +141,8 @@ export default function Grade() {
 
           <div className="grade-cards">
             {itensDia.map((p, i) => {
-              const hParts = (p.horarioStr || "").split(":");
-              const hSecs  = hParts.length >= 2 ? +hParts[0] * 3600 + +hParts[1] * 60 : null;
+              const hParts   = (p.horarioStr || "").split(":");
+              const hSecs    = hParts.length >= 2 ? +hParts[0] * 3600 + +hParts[1] * 60 : null;
               const isAoVivo  = diaSel === hojeKey() && hSecs !== null && nowSecs >= hSecs && nowSecs < hSecs + 7200;
               const isPassado = diaSel === hojeKey() && hSecs !== null && nowSecs >= hSecs + 7200;
 
@@ -161,16 +157,13 @@ export default function Grade() {
                   onClick={() => { if (p.topicoUrl) window.open(p.topicoUrl, "_blank"); }}
                   style={{ cursor: p.topicoUrl ? "pointer" : "default" }}
                 >
-                  {/* Capa */}
                   <div className="grade-card-thumb">
                     {p.capaUrl
                       ? <img src={p.capaUrl} alt={p.programa} />
                       : <div className="grade-card-thumb-placeholder">📺</div>}
-                    {isAoVivo && <span className="grade-card-live">● AO VIVO</span>}
+                    {isAoVivo  && <span className="grade-card-live">● AO VIVO</span>}
                     {isPassado && <span className="grade-card-ended">Encerrado</span>}
                   </div>
-
-                  {/* Info */}
                   <div className="grade-card-info">
                     <span className="grade-card-horario">{p.horarioStr || "—"}</span>
                     <span className="grade-card-programa">{p.programa}</span>
