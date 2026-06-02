@@ -3,19 +3,28 @@ import { motion, AnimatePresence } from "motion/react";
 import Chat from "../components/Chat";
 import { fetchGAS } from "../lib/gas";
 
-const CHAT_URL  = "https://empiretv-chat-backend.onrender.com";
-const LOGO      = "https://i.imgur.com/6cL3Ca9.png";
-const KICK_CHANNEL = "empiretvoficial";
-const KICK_PLAYER  = `https://player.kick.com/${KICK_CHANNEL}?muted=false`;
-const KICK_CHAT    = `https://www.kick.com/${KICK_CHANNEL}/chatroom`;
+const CHAT_URL      = "https://empiretv-chat-backend.onrender.com";
+const LOGO          = "https://i.imgur.com/6cL3Ca9.png";
+const KICK_CHANNEL  = "empiretvoficial";
+const KICK_PLAYER   = `https://player.kick.com/${KICK_CHANNEL}?muted=false`;
 
 interface Transmission {
-  status: string; programa: string; tipo: string;
-  materialTocando?: string; buff?: string;
-  videoUrl?: string; seekOffset?: number;
-  durationSeconds?: number; isBackup?: boolean;
-  rowNum?: number; topicoId?: string; capaUrl?: string;
-  secondsToStart?: number; topicoUrl?: string;
+  status: string; programa: string; tipo?: string;
+  material?: string; buff?: string;
+  videoUrl?: string; seekOffset?: number; duracao?: number;
+  isBackup?: boolean; rowNum?: number;
+  topicoId?: string; topicoUrl?: string; capaUrl?: string;
+  secondsToStart?: number;
+}
+
+/** Decide qual player usar com base no payload do GAS */
+function resolveMode(c: Transmission | null, loading: boolean): "loading"|"kick"|"video"|"upcoming"|"static" {
+  if (loading)                             return "loading";
+  if (!c || c.status === "off")            return "static";
+  if (c.status === "upcoming")             return "upcoming";
+  // broadcasting:
+  const isKick = !!c.topicoUrl?.includes("kick.com") || !c.videoUrl;
+  return isKick ? "kick" : "video";
 }
 
 export default function AoVivo() {
@@ -26,22 +35,14 @@ export default function AoVivo() {
 
   const [current,     setCurrent]     = useState<Transmission | null>(null);
   const [loading,     setLoading]     = useState(true);
-  const [useStatic,   setUseStatic]   = useState(false);
   const [muted,       setMuted]       = useState(false);
   const [isSyncing,   setIsSyncing]   = useState(false);
   const [countdown,   setCountdown]   = useState<number | null>(null);
   const [onlineCount, setOnlineCount] = useState(0);
 
-  // Modo do player: "kick" | "video" | "static" | "upcoming"
-  const playerMode = (() => {
-    if (loading) return "loading";
-    if (!current || current.status === "off") return "static";
-    if (current.status === "upcoming") return "upcoming";
-    if (current.topicoUrl?.includes("kick.com") || !current.videoUrl) return "kick";
-    return "video";
-  })();
+  const playerMode = resolveMode(current, loading);
 
-  // Estática analógica
+  // ── Estática analógica ──────────────────────────────────────
   useEffect(() => {
     if (playerMode !== "static") return;
     const canvas = canvasRef.current;
@@ -70,38 +71,43 @@ export default function AoVivo() {
     return () => { cancelAnimationFrame(animId); window.removeEventListener("resize", resize); };
   }, [playerMode]);
 
+  // ── Fetch principal ─────────────────────────────────────────
   const fetchAndSync = useCallback(async () => {
     setIsSyncing(true);
     try {
       const data = await fetchGAS();
-      if (!data || (data.status !== "success" && data.status !== "ok")) {
-        setUseStatic(true); setLoading(false); setIsSyncing(false); return;
-      }
-      const c: Transmission = data.current || { status: "off", programa: "Empire TV" };
+      const c: Transmission = data?.current || { status: "off", programa: "Empire TV" };
       setCurrent(c);
-      setUseStatic(false);
-      if (c.status === "upcoming" && c.secondsToStart) setCountdown(c.secondsToStart);
+      if (c.status === "upcoming" && c.secondsToStart)
+        setCountdown(c.secondsToStart);
 
-      // Só usa <video> se NÃO for Kick
+      // Aplica seekOffset no <video> se for modo drive
       if (c.videoUrl && !c.topicoUrl?.includes("kick.com")) {
         const video = videoRef.current;
-        if (!video) { setIsSyncing(false); return; }
+        if (!video) return;
         if (currentUrlRef.current !== c.videoUrl) {
           currentUrlRef.current = c.videoUrl;
           video.pause();
           video.addEventListener("loadedmetadata", () => {
             video.currentTime = Math.max(c.seekOffset || 0, 0);
-            video.play().catch(() => { video.muted = true; setMuted(true); video.play().catch(() => {}); });
+            video.play().catch(() => {
+              video.muted = true; setMuted(true);
+              video.play().catch(() => {});
+            });
           }, { once: true });
           video.src = c.videoUrl;
           video.load();
-        } else {
-          if (Math.abs(video.currentTime - (c.seekOffset || 0)) > 5)
-            video.currentTime = c.seekOffset || 0;
+        } else if (Math.abs(video.currentTime - (c.seekOffset || 0)) > 5) {
+          video.currentTime = c.seekOffset || 0;
         }
       }
-    } catch { setUseStatic(true); }
-    finally { setLoading(false); setIsSyncing(false); }
+    } catch (err) {
+      console.error("[AoVivo] fetchAndSync:", err);
+      setCurrent({ status: "off", programa: "Empire TV" });
+    } finally {
+      setLoading(false);
+      setIsSyncing(false);
+    }
   }, []);
 
   useEffect(() => {
@@ -110,6 +116,7 @@ export default function AoVivo() {
     return () => clearInterval(t);
   }, [fetchAndSync]);
 
+  // ── Countdown ───────────────────────────────────────────────
   useEffect(() => {
     if (!countdown || countdown <= 0) return;
     const t = setInterval(() => setCountdown(p => {
@@ -119,11 +126,12 @@ export default function AoVivo() {
     return () => clearInterval(t);
   }, [countdown, fetchAndSync]);
 
+  // ── Polling online ──────────────────────────────────────────
   useEffect(() => {
     if (!current?.topicoId) return;
     const poll = async () => {
       try {
-        const r = await fetch(`${CHAT_URL}/online/${current.topicoId}`);
+        const r = await fetch(`${CHAT_URL}/online/${current!.topicoId}`);
         const d = await r.json();
         if (d.count !== undefined) setOnlineCount(d.count);
       } catch {}
@@ -134,11 +142,15 @@ export default function AoVivo() {
   }, [current?.topicoId]);
 
   const pad = (n: number) => String(n).padStart(2, "0");
-  const fmtCountdown = (s: number) => `${pad(Math.floor(s/3600))}:${pad(Math.floor((s%3600)/60))}:${pad(s%60)}`;
+  const fmtCountdown = (s: number) =>
+    `${pad(Math.floor(s / 3600))}:${pad(Math.floor((s % 3600) / 60))}:${pad(s % 60)}`;
+
+  const showChat = (playerMode === "kick" || playerMode === "video") && !!current?.topicoId;
 
   return (
     <div className="av-page">
-      {/* Header */}
+
+      {/* ── Header ── */}
       <header className="av-header">
         <div className="av-logo"><img src={LOGO} alt="Empire TV" /></div>
         <div className="av-header-right">
@@ -159,14 +171,12 @@ export default function AoVivo() {
         </div>
       </header>
 
-      {/* Mudo warning */}
+      {/* ── Mudo warning ── */}
       <AnimatePresence>
         {muted && (
           <motion.div
             className="av-muted-bar"
-            initial={{ y: -40, opacity: 0 }}
-            animate={{ y: 0, opacity: 1 }}
-            exit={{ y: -40, opacity: 0 }}
+            initial={{ y: -40, opacity: 0 }} animate={{ y: 0, opacity: 1 }} exit={{ y: -40, opacity: 0 }}
             onClick={() => {
               const v = videoRef.current;
               if (v) { v.muted = false; setMuted(false); v.play().catch(() => {}); }
@@ -177,10 +187,9 @@ export default function AoVivo() {
         )}
       </AnimatePresence>
 
-      {/* Player wrapper */}
+      {/* ── Player ── */}
       <div className="av-player-wrap">
 
-        {/* Loading */}
         {playerMode === "loading" && (
           <div className="av-overlay">
             <div className="av-spinner" />
@@ -188,7 +197,6 @@ export default function AoVivo() {
           </div>
         )}
 
-        {/* Upcoming countdown */}
         {playerMode === "upcoming" && (
           <div className="av-overlay av-upcoming">
             {current?.capaUrl && <img src={current.capaUrl} alt="" className="av-upcoming-bg" />}
@@ -202,7 +210,6 @@ export default function AoVivo() {
           </div>
         )}
 
-        {/* Sem sinal */}
         {playerMode === "static" && (
           <div className="av-overlay">
             <canvas ref={canvasRef} className="av-static-canvas" />
@@ -217,7 +224,6 @@ export default function AoVivo() {
           </div>
         )}
 
-        {/* Kick embed */}
         {playerMode === "kick" && (
           <iframe
             className="av-kick-frame"
@@ -228,7 +234,6 @@ export default function AoVivo() {
           />
         )}
 
-        {/* Video Drive/Proxy */}
         {playerMode === "video" && (
           <video
             ref={videoRef}
@@ -237,25 +242,23 @@ export default function AoVivo() {
             className="av-video"
             onEnded={fetchAndSync}
             onError={() => {
-              const v = videoRef.current;
-              if (!v?.src || v.error?.code === 1) return;
               errorCountRef.current++;
               if (errorCountRef.current < 3) {
                 setTimeout(() => { currentUrlRef.current = ""; fetchAndSync(); }, 2000);
-              } else { setUseStatic(true); }
+              } else {
+                setCurrent({ status: "off", programa: "Empire TV" });
+              }
             }}
           />
         )}
       </div>
 
-      {/* Info bar — broadcasting */}
+      {/* ── Info bar ── */}
       <AnimatePresence>
         {current && !loading && (playerMode === "kick" || playerMode === "video") && (
           <motion.div
             className="av-infobar"
-            initial={{ opacity: 0, y: 10 }}
-            animate={{ opacity: 1, y: 0 }}
-            exit={{ opacity: 0 }}
+            initial={{ opacity: 0, y: 10 }} animate={{ opacity: 1, y: 0 }} exit={{ opacity: 0 }}
           >
             <div className="av-infobar-left">
               <span className="av-live-badge">● AO VIVO</span>
@@ -267,20 +270,18 @@ export default function AoVivo() {
         )}
       </AnimatePresence>
 
-      {/* Chat: se Kick → chatroom embed, se Drive → chat interno, se tem topicoId */}
-      {playerMode === "kick" && (
+      {/* ── Chat ── */}
+      {showChat && (
         <div className="av-chat-section">
-          <div className="av-chat-header">💬 Chat ao vivo</div>
-          <iframe
-            className="av-kick-chat"
-            src={KICK_CHAT}
-            title="Chat Empire TV"
-          />
+          <Chat roomId={current!.topicoId!} backendUrl={CHAT_URL} />
         </div>
       )}
-      {playerMode === "video" && current?.topicoId && (
-        <div className="av-chat-section">
-          <Chat roomId={current.topicoId} backendUrl={CHAT_URL} />
+
+      {/* Sem chat: placeholder enquanto loading */}
+      {!showChat && !loading && playerMode !== "static" && playerMode !== "upcoming" && (
+        <div className="av-chat-placeholder">
+          <span>💬</span>
+          <p>Chat não disponível para esta transmissão.</p>
         </div>
       )}
     </div>
