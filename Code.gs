@@ -8,6 +8,17 @@
 const SHEET_NAME     = "Agenda_TV";
 const SPREADSHEET_ID = "";
 
+// ── Configurações do GitHub ────────────────────────────────────
+// Preencha com seu token (Settings > Developer settings > Personal access tokens > Fine-grained)
+// Permissão necessária: Actions > Read and write
+const GITHUB_TOKEN = ""; // ex: "github_pat_XXXX..."
+const GITHUB_OWNER = "empirerpg-max";
+const GITHUB_REPO  = "empiretv";
+const GITHUB_WORKFLOW_ID = "transmissao.yml";
+
+// Janela de tolerância: quantos minutos antes/depois do horário o GAS ainda dispara
+const JANELA_MINUTOS = 10;
+
 function getSheet() {
   const ss = SPREADSHEET_ID
     ? SpreadsheetApp.openById(SPREADSHEET_ID)
@@ -38,7 +49,7 @@ function nowSaoPaulo() {
   return new Date(now.toLocaleString("en-US", { timeZone: "America/Sao_Paulo" }));
 }
 
-const SKIP_STATUSES = ["concluido","concluído","finalizado","cancelado","transmitido"];
+const SKIP_STATUSES = ["concluido","concluído","finalizado","cancelado","transmitido","transmitindo","arquivado"];
 
 // Converte qualquer valor de data/hora do Sheets p/ Date em Brasília
 function parseDataHora(dataVal, horarioVal) {
@@ -138,7 +149,6 @@ function buildPayload() {
   const schedule = [];
 
   dataRows.forEach((row, idx) => {
-    // Ignora linha completamente vazia
     if (!row[iPrograma] && !row[iData]) return;
 
     const rowStatus = String(row[iStatus] || "").trim().toLowerCase();
@@ -194,8 +204,6 @@ function buildPayload() {
 
   const fmt = (dt, pattern) => Utilities.formatDate(dt, "America/Sao_Paulo", pattern);
 
-  // fullSchedule inclui TODOS os itens válidos (passados, presentes, futuros)
-  // data sempre em dd/MM/yyyy para o frontend casar com toKey()
   const fullSchedule = schedule.map(item => ({
     rowNum:     item.rowNum,
     horarioStr: fmt(item.startDt, "HH:mm"),
@@ -233,6 +241,115 @@ function buildPayload() {
     current:      currentOut,
     fullSchedule: fullSchedule
   };
+}
+
+// ── Disparo automático do GitHub Actions ───────────────────────
+// Esta função deve ter um trigger de tempo a cada 5 minutos no GAS.
+// Ela verifica a Agenda_TV e, se houver programa dentro da janela
+// de ±JANELA_MINUTOS do horário agendado, dispara o workflow.
+function dispararTransmissao() {
+  if (!GITHUB_TOKEN) {
+    Logger.log("[dispararTransmissao] GITHUB_TOKEN não configurado — abortando.");
+    return;
+  }
+
+  const sheet = getSheet();
+  const rows  = sheet.getDataRange().getValues();
+  if (rows.length <= 1) {
+    Logger.log("[dispararTransmissao] Agenda vazia.");
+    return;
+  }
+
+  const headers    = rows[0].map(h => String(h).trim());
+  const dataRows   = rows.slice(1);
+  const iData      = col(headers, "Data");
+  const iHorario   = col(headers, "Horario");
+  const iPrograma  = col(headers, "Programa");
+  const iStatus    = col(headers, "Status");
+
+  const now        = nowSaoPaulo();
+  const janela_ms  = JANELA_MINUTOS * 60 * 1000;
+  const props      = PropertiesService.getScriptProperties();
+
+  for (let i = 0; i < dataRows.length; i++) {
+    const row       = dataRows[i];
+    const rowStatus = String(row[iStatus] || "").trim().toLowerCase();
+
+    // Pula linhas já processadas
+    if (SKIP_STATUSES.includes(rowStatus)) continue;
+
+    const startDt = parseDataHora(
+      iData    >= 0 ? row[iData]    : "",
+      iHorario >= 0 ? row[iHorario] : ""
+    );
+    if (!startDt) continue;
+
+    const diffMs = now - startDt; // positivo = já passou, negativo = ainda vai chegar
+
+    // Dentro da janela: de -JANELA_MINUTOS antes até +JANELA_MINUTOS depois
+    if (diffMs >= -janela_ms && diffMs <= janela_ms) {
+      const programa  = String(row[iPrograma] || "Empire TV").trim();
+      // Chave única por programa + data + horário — evita disparar duas vezes o mesmo
+      const chave     = `disparado_${programa}_${Utilities.formatDate(startDt, "America/Sao_Paulo", "yyyyMMdd_HHmm")}`;
+
+      if (props.getProperty(chave)) {
+        Logger.log(`[dispararTransmissao] Já disparado: ${chave} — pulando.`);
+        continue;
+      }
+
+      Logger.log(`[dispararTransmissao] Programa encontrado na janela: "${programa}" — disparando GitHub Actions...`);
+
+      const url     = `https://api.github.com/repos/${GITHUB_OWNER}/${GITHUB_REPO}/actions/workflows/${GITHUB_WORKFLOW_ID}/dispatches`;
+      const payload = JSON.stringify({ ref: "main" });
+
+      const options = {
+        method: "post",
+        contentType: "application/json",
+        headers: {
+          "Authorization": `Bearer ${GITHUB_TOKEN}`,
+          "Accept": "application/vnd.github+json",
+          "X-GitHub-Api-Version": "2022-11-28"
+        },
+        payload: payload,
+        muteHttpExceptions: true
+      };
+
+      const resp = UrlFetchApp.fetch(url, options);
+      const code = resp.getResponseCode();
+
+      if (code === 204) {
+        Logger.log(`[dispararTransmissao] ✓ Workflow disparado com sucesso para "${programa}"`);
+        // Registra para não disparar de novo nas próximas rodadas dos 5 min
+        // TTL: guarda por 4 horas (seguro para programas de até 4h)
+        props.setProperty(chave, new Date().toISOString());
+      } else {
+        Logger.log(`[dispararTransmissao] Erro ao disparar (HTTP ${code}): ${resp.getContentText()}`);
+      }
+
+      // Dispara apenas o primeiro programa encontrado na janela por rodada
+      // (evita disparar múltiplos programas ao mesmo tempo)
+      break;
+    }
+  }
+}
+
+// ── Configura o trigger automático de 5 em 5 minutos ──────────
+// Execute esta função UMA VEZ manualmente no editor do GAS para instalar o trigger.
+// Depois disso, o GAS chama dispararTransmissao() automaticamente.
+function instalarTrigger() {
+  // Remove triggers existentes de dispararTransmissao para evitar duplicatas
+  ScriptApp.getProjectTriggers().forEach(t => {
+    if (t.getHandlerFunction() === "dispararTransmissao") {
+      ScriptApp.deleteTrigger(t);
+    }
+  });
+
+  ScriptApp.newTrigger("dispararTransmissao")
+    .timeBased()
+    .everyMinutes(5)
+    .create();
+
+  Logger.log("[instalarTrigger] Trigger de 5 minutos instalado com sucesso!");
 }
 
 // ── Debug ──────────────────────────────────────────────────────
