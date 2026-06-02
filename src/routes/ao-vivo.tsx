@@ -2,11 +2,16 @@ import React, { useEffect, useRef, useState, useCallback } from "react";
 import { motion, AnimatePresence } from "motion/react";
 import Chat from "../components/Chat";
 import { fetchGAS } from "../lib/gas";
+import { closeRoom } from "../lib/chatArchive";
+import { createClient } from "@supabase/supabase-js";
 
-const CHAT_URL      = "https://empiretv-chat-backend.onrender.com";
-const LOGO          = "https://i.imgur.com/6cL3Ca9.png";
-const KICK_CHANNEL  = "empiretvoficial";
-const KICK_PLAYER   = `https://player.kick.com/${KICK_CHANNEL}?muted=false`;
+const SUPABASE_URL  = "https://rcfzzhucvsqeqdlfoxmq.supabase.co";
+const SUPABASE_ANON = "eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJpc3MiOiJzdXBhYmFzZSIsInJlZiI6InJjZnp6aHVjdnNxZXFkbGZveG1xIiwicm9sZSI6ImFub24iLCJpYXQiOjE3ODAzMzg2MTQsImV4cCI6MjA5NTkxNDYxNH0.U9SL1CDN2jNpv2H0BSwP-lw2hA045cKtrPbccFWV1BQ";
+const sb = createClient(SUPABASE_URL, SUPABASE_ANON);
+
+const LOGO         = "https://i.imgur.com/6cL3Ca9.png";
+const KICK_CHANNEL = "empiretvoficial";
+const KICK_PLAYER  = `https://player.kick.com/${KICK_CHANNEL}?muted=false`;
 
 interface Transmission {
   status: string; programa: string; tipo?: string;
@@ -18,40 +23,37 @@ interface Transmission {
 }
 
 function resolveMode(c: Transmission | null, loading: boolean): "loading"|"kick"|"video"|"upcoming"|"static" {
-  if (loading)                             return "loading";
-  if (!c || c.status === "off")            return "static";
-  if (c.status === "upcoming")             return "upcoming";
+  if (loading)                                               return "loading";
+  if (!c || c.status === "off" || c.status === "finalizado") return "static";
+  if (c.status === "upcoming")                               return "upcoming";
   const isKick = !!c.topicoUrl?.includes("kick.com") || !c.videoUrl;
   return isKick ? "kick" : "video";
 }
 
-// Gera um roomId de fallback baseado na data+programa quando topicoId não vem do GAS
 function fallbackRoomId(c: Transmission): string {
   const hoje = new Date().toISOString().slice(0, 10);
   return `room-${hoje}-${(c.programa || "live").toLowerCase().replace(/\s+/g, "-")}`;
 }
 
 export default function AoVivo() {
-  const videoRef      = useRef<HTMLVideoElement>(null);
-  const canvasRef     = useRef<HTMLCanvasElement>(null);
-  const currentUrlRef = useRef("");
-  const errorCountRef = useRef(0);
+  const videoRef       = useRef<HTMLVideoElement>(null);
+  const canvasRef      = useRef<HTMLCanvasElement>(null);
+  const currentUrlRef  = useRef("");
+  const errorCountRef  = useRef(0);
+  const closedRooms    = useRef<Set<string>>(new Set());
 
-  const [current,     setCurrent]     = useState<Transmission | null>(null);
-  const [loading,     setLoading]     = useState(true);
-  const [muted,       setMuted]       = useState(false);
-  const [isSyncing,   setIsSyncing]   = useState(false);
-  const [countdown,   setCountdown]   = useState<number | null>(null);
-  const [onlineCount, setOnlineCount] = useState(0);
+  const [current,    setCurrent]    = useState<Transmission | null>(null);
+  const [loading,    setLoading]    = useState(true);
+  const [muted,      setMuted]      = useState(false);
+  const [isSyncing,  setIsSyncing]  = useState(false);
+  const [countdown,  setCountdown]  = useState<number | null>(null);
+  const [onlineCount,setOnlineCount]= useState(0);
 
   const playerMode = resolveMode(current, loading);
-
-  // Chat aparece sempre que estiver broadcasting (kick ou video),
-  // usando topicoId do GAS ou fallback gerado localmente
-  const roomId  = current?.topicoId || (current ? fallbackRoomId(current) : null);
+  const roomId   = current?.topicoId || (current ? fallbackRoomId(current) : null);
   const showChat = (playerMode === "kick" || playerMode === "video") && !!roomId;
 
-  // ── Estática analógica ──────────────────────────────────────
+  // ── Estática analógica ──
   useEffect(() => {
     if (playerMode !== "static") return;
     const canvas = canvasRef.current;
@@ -80,13 +82,26 @@ export default function AoVivo() {
     return () => { cancelAnimationFrame(animId); window.removeEventListener("resize", resize); };
   }, [playerMode]);
 
-  // ── Fetch principal ─────────────────────────────────────────
+  // ── Fetch principal ──
   const fetchAndSync = useCallback(async () => {
     setIsSyncing(true);
     try {
       const data = await fetchGAS();
       const c: Transmission = data?.current || { status: "off", programa: "Empire TV" };
       setCurrent(c);
+
+      // ── Auto-encerrar sala quando status === "finalizado" ──
+      if (c.status === "finalizado") {
+        const rid = c.topicoId || fallbackRoomId(c);
+        if (rid && !closedRooms.current.has(rid)) {
+          closedRooms.current.add(rid);
+          // Fecha em background sem bloquear a UI
+          closeRoom(rid, c.programa).catch(err =>
+            console.error("[closeRoom]", err)
+          );
+        }
+      }
+
       if (c.status === "upcoming" && c.secondsToStart)
         setCountdown(c.secondsToStart);
 
@@ -124,7 +139,7 @@ export default function AoVivo() {
     return () => clearInterval(t);
   }, [fetchAndSync]);
 
-  // ── Countdown ───────────────────────────────────────────────
+  // ── Countdown ──
   useEffect(() => {
     if (!countdown || countdown <= 0) return;
     const t = setInterval(() => setCountdown(p => {
@@ -134,29 +149,25 @@ export default function AoVivo() {
     return () => clearInterval(t);
   }, [countdown, fetchAndSync]);
 
-  // ── Polling online ──────────────────────────────────────────
+  // ── Online count via Supabase Presence ──
   useEffect(() => {
     if (!roomId) return;
-    const poll = async () => {
-      try {
-        const r = await fetch(`${CHAT_URL}/online/${roomId}`);
-        const d = await r.json();
-        if (d.count !== undefined) setOnlineCount(d.count);
-      } catch {}
-    };
-    poll();
-    const t = setInterval(poll, 15000);
-    return () => clearInterval(t);
+    const ch = sb
+      .channel(`chat-broadcast:${roomId}`)
+      .on("presence", { event: "sync" }, () => {
+        setOnlineCount(Object.keys(ch.presenceState()).length);
+      })
+      .subscribe();
+    return () => { sb.removeChannel(ch); };
   }, [roomId]);
 
   const pad = (n: number) => String(n).padStart(2, "0");
   const fmtCountdown = (s: number) =>
-    `${pad(Math.floor(s / 3600))}:${pad(Math.floor((s % 3600) / 60))}:${pad(s % 60)}`;
+    `${pad(Math.floor(s/3600))}:${pad(Math.floor((s%3600)/60))}:${pad(s%60)}`;
 
   return (
     <div className="av-page">
-
-      {/* ── Header ── */}
+      {/* Header */}
       <header className="av-header">
         <div className="av-logo"><img src={LOGO} alt="Empire TV" /></div>
         <div className="av-header-right">
@@ -177,7 +188,6 @@ export default function AoVivo() {
         </div>
       </header>
 
-      {/* ── Mudo warning ── */}
       <AnimatePresence>
         {muted && (
           <motion.div
@@ -193,16 +203,14 @@ export default function AoVivo() {
         )}
       </AnimatePresence>
 
-      {/* ── Player ── */}
+      {/* Player */}
       <div className="av-player-wrap">
-
         {playerMode === "loading" && (
           <div className="av-overlay">
             <div className="av-spinner" />
             <p className="av-loading-txt">Sintonizando…</p>
           </div>
         )}
-
         {playerMode === "upcoming" && (
           <div className="av-overlay av-upcoming">
             {current?.capaUrl && <img src={current.capaUrl} alt="" className="av-upcoming-bg" />}
@@ -215,7 +223,6 @@ export default function AoVivo() {
             </div>
           </div>
         )}
-
         {playerMode === "static" && (
           <div className="av-overlay">
             <canvas ref={canvasRef} className="av-static-canvas" />
@@ -229,7 +236,6 @@ export default function AoVivo() {
             </div>
           </div>
         )}
-
         {playerMode === "kick" && (
           <iframe
             className="av-kick-frame"
@@ -239,7 +245,6 @@ export default function AoVivo() {
             title="Empire TV ao vivo"
           />
         )}
-
         {playerMode === "video" && (
           <video
             ref={videoRef}
@@ -259,7 +264,7 @@ export default function AoVivo() {
         )}
       </div>
 
-      {/* ── Info bar ── */}
+      {/* Info bar */}
       <AnimatePresence>
         {current && !loading && (playerMode === "kick" || playerMode === "video") && (
           <motion.div
@@ -276,13 +281,12 @@ export default function AoVivo() {
         )}
       </AnimatePresence>
 
-      {/* ── Chat ── */}
+      {/* Chat */}
       {showChat && (
         <div className="av-chat-section">
-          <Chat roomId={roomId!} backendUrl={CHAT_URL} />
+          <Chat roomId={roomId!} programa={current?.programa} />
         </div>
       )}
-
       {!showChat && !loading && playerMode !== "static" && playerMode !== "upcoming" && (
         <div className="av-chat-placeholder">
           <span>💬</span>

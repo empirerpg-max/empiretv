@@ -1,42 +1,59 @@
 import { useEffect, useState } from "react";
 import { motion, AnimatePresence } from "motion/react";
 import { driveImg } from "../lib/driveImg";
+import { createClient } from "@supabase/supabase-js";
 
-const BACKEND = "https://empiretv-chat-backend.onrender.com";
+const SUPABASE_URL  = "https://rcfzzhucvsqeqdlfoxmq.supabase.co";
+const SUPABASE_ANON = "eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJpc3MiOiJzdXBhYmFzZSIsInJlZiI6InJjZnp6aHVjdnNxZXFkbGZveG1xIiwicm9sZSI6ImFub24iLCJpYXQiOjE3ODAzMzg2MTQsImV4cCI6MjA5NTkxNDYxNH0.U9SL1CDN2jNpv2H0BSwP-lw2hA045cKtrPbccFWV1BQ";
+const sb = createClient(SUPABASE_URL, SUPABASE_ANON);
 
-interface ArchiveItem {
-  roomId: string; programa: string; tipo: string;
-  data: string; horario: string; capaUrl: string; totalMsgs: number;
+interface Archive {
+  room_id: string;
+  programa: string;
+  encerrado_at: string;
+  messages_json: Msg[];
 }
-interface RoomMsg {
-  nome: string; texto: string; hora: string; gifUrl?: string;
+
+interface Msg {
+  id: string;
+  nome: string;
+  texto: string;
+  gif_url?: string;
+  reply_to?: { nome: string; texto: string };
+  created_at: string;
+}
+
+function fmtData(iso: string) {
+  try {
+    return new Date(iso).toLocaleString("pt-BR", {
+      day: "2-digit", month: "2-digit", year: "numeric",
+      hour: "2-digit", minute: "2-digit",
+    });
+  } catch { return iso; }
+}
+
+function fmtHora(iso: string) {
+  try {
+    return new Date(iso).toLocaleTimeString("pt-BR", { hour: "2-digit", minute: "2-digit" });
+  } catch { return ""; }
 }
 
 export default function Arquivo() {
-  const [items,    setItems]    = useState<ArchiveItem[]>([]);
+  const [items,    setItems]    = useState<Archive[]>([]);
   const [loading,  setLoading]  = useState(true);
   const [erro,     setErro]     = useState("");
-  const [selected, setSelected] = useState<ArchiveItem | null>(null);
-  const [msgs,     setMsgs]     = useState<RoomMsg[]>([]);
-  const [loadingMsgs, setLoadingMsgs] = useState(false);
+  const [selected, setSelected] = useState<Archive | null>(null);
 
   useEffect(() => {
-    fetch(`${BACKEND}/archive`)
-      .then(r => r.json())
-      .then(d => setItems(d.archive || []))
-      .catch(() => setErro("Erro ao carregar o arquivo."))
-      .finally(() => setLoading(false));
+    sb.from("chat_archives")
+      .select("room_id, programa, encerrado_at, messages_json")
+      .order("encerrado_at", { ascending: false })
+      .then(({ data, error }) => {
+        if (error) { setErro("Erro ao carregar o arquivo."); }
+        else        { setItems((data as Archive[]) || []); }
+        setLoading(false);
+      });
   }, []);
-
-  const openRoom = async (item: ArchiveItem) => {
-    setSelected(item); setMsgs([]); setLoadingMsgs(true);
-    try {
-      const r = await fetch(`${BACKEND}/messages/${item.roomId}`);
-      const d = await r.json();
-      setMsgs(d.messages || []);
-    } catch {}
-    finally { setLoadingMsgs(false); }
-  };
 
   return (
     <div className="arquivo-page">
@@ -52,34 +69,47 @@ export default function Arquivo() {
           >
             <button className="arquivo-back" onClick={() => setSelected(null)}>← Voltar</button>
             <div className="arquivo-detail-header">
-              {selected.capaUrl
-                ? <img src={driveImg(selected.capaUrl)} alt={selected.programa} className="arquivo-detail-capa" loading="lazy" />
-                : <div className="arquivo-thumb-placeholder">🎬</div>}
               <div>
                 <div className="arquivo-detail-title">{selected.programa}</div>
-                <span className="arquivo-detail-tipo">{selected.tipo}</span>
-                <div className="arquivo-detail-meta">{selected.data} • {selected.horario}</div>
-                <div className="arquivo-detail-meta">💬 {selected.totalMsgs} mensagens</div>
+                <div className="arquivo-detail-meta">
+                  Encerrado em {fmtData(selected.encerrado_at)}
+                </div>
+                <div className="arquivo-detail-meta">
+                  💬 {selected.messages_json.length} mensagens
+                </div>
               </div>
             </div>
-            {loadingMsgs && <div className="arquivo-loading">Carregando mensagens…</div>}
-            <ul style={{ listStyle: "none", display: "flex", flexDirection: "column", gap: 10 }}>
-              {msgs.map((m, i) => (
+
+            <ul style={{ listStyle: "none", display: "flex", flexDirection: "column", gap: 10, marginTop: 16 }}>
+              {selected.messages_json.map((m, i) => (
                 <motion.li
-                  key={i}
+                  key={m.id ?? i}
                   initial={{ opacity: 0, y: 12 }}
                   animate={{ opacity: 1, y: 0 }}
-                  transition={{ delay: i * 0.03, duration: 0.22 }}
+                  transition={{ delay: i * 0.02, duration: 0.22 }}
                   style={{
                     background: "var(--glass-card)", borderRadius: "var(--r)",
                     border: "1px solid var(--glass-border)", padding: "10px 13px",
                   }}
                 >
-                  <div style={{ fontSize: 10, fontWeight: 700, color: "var(--purple-light)", marginBottom: 4 }}>{m.nome}</div>
-                  {m.gifUrl
-                    ? <img src={m.gifUrl} alt="gif" style={{ maxWidth: 160, borderRadius: 8 }} />
+                  {/* reply quote */}
+                  {m.reply_to && (
+                    <div style={{
+                      borderLeft: "3px solid var(--purple-light)",
+                      paddingLeft: 8, marginBottom: 6,
+                      fontSize: 11, color: "var(--text3)"
+                    }}>
+                      <span style={{ fontWeight: 700, color: "var(--purple-light)" }}>{m.reply_to.nome} </span>
+                      {m.reply_to.texto}
+                    </div>
+                  )}
+                  <div style={{ fontSize: 10, fontWeight: 700, color: "var(--purple-light)", marginBottom: 4 }}>
+                    {m.nome}
+                  </div>
+                  {m.gif_url
+                    ? <img src={m.gif_url} alt="gif" style={{ maxWidth: 160, borderRadius: 8 }} />
                     : <div style={{ fontSize: 13, color: "var(--text)", lineHeight: 1.5 }}>{m.texto}</div>}
-                  <div style={{ fontSize: 9, color: "var(--text3)", marginTop: 4 }}>{m.hora}</div>
+                  <div style={{ fontSize: 9, color: "var(--text3)", marginTop: 4 }}>{fmtHora(m.created_at)}</div>
                 </motion.li>
               ))}
             </ul>
@@ -93,31 +123,32 @@ export default function Arquivo() {
             transition={{ duration: 0.22 }}
           >
             <h1 className="arquivo-title">Arquivo</h1>
-            {loading && <div className="arquivo-loading">Carregando…</div>}
-            {erro    && <div className="arquivo-erro">{erro}</div>}
+            {loading  && <div className="arquivo-loading">Carregando…</div>}
+            {erro     && <div className="arquivo-erro">{erro}</div>}
             {!loading && !erro && items.length === 0 && (
-              <div className="arquivo-vazio"><p>📭</p><p>Nenhuma transmissão arquivada.</p><p className="arquivo-vazio-sub">As transmissões anteriores aparecerão aqui.</p></div>
+              <div className="arquivo-vazio">
+                <p>📭</p>
+                <p>Nenhuma transmissão arquivada.</p>
+                <p className="arquivo-vazio-sub">As transmissões anteriores aparecerão aqui.</p>
+              </div>
             )}
             <ul className="arquivo-lista">
               {items.map((item, i) => (
                 <motion.li
-                  key={item.roomId}
+                  key={item.room_id}
                   className="arquivo-item"
                   initial={{ opacity: 0, y: 16 }}
                   animate={{ opacity: 1, y: 0 }}
                   transition={{ duration: 0.28, delay: i * 0.05, ease: [0.4, 0, 0.2, 1] }}
                   whileHover={{ x: 4, borderColor: "var(--purple-border)", transition: { type: "spring", stiffness: 300, damping: 22 } }}
                   whileTap={{ scale: 0.98 }}
-                  onClick={() => openRoom(item)}
+                  onClick={() => setSelected(item)}
                 >
-                  {item.capaUrl
-                    ? <img src={driveImg(item.capaUrl)} alt={item.programa} className="arquivo-thumb" loading="lazy" />
-                    : <div className="arquivo-thumb-placeholder">🎬</div>}
+                  <div className="arquivo-thumb-placeholder">🎬</div>
                   <div className="arquivo-item-info">
                     <span className="arquivo-programa">{item.programa}</span>
-                    <span className="arquivo-tipo">{item.tipo}</span>
-                    <span className="arquivo-data">{item.data} • {item.horario}</span>
-                    <span className="arquivo-stats">💬 {item.totalMsgs} msgs</span>
+                    <span className="arquivo-data">{fmtData(item.encerrado_at)}</span>
+                    <span className="arquivo-stats">💬 {item.messages_json.length} msgs</span>
                   </div>
                   <span className="arquivo-arrow">›</span>
                 </motion.li>
