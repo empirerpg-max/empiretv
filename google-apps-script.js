@@ -32,7 +32,6 @@ function initHeaders(sheet) {
 }
 
 function col(headers, name) {
-  // Retorna índice (0-based) de forma case-insensitive
   const n = name.trim().toLowerCase();
   return headers.findIndex(h => String(h).trim().toLowerCase() === n);
 }
@@ -43,8 +42,6 @@ function nowSaoPaulo() {
 }
 
 function parseDataHora(dataVal, horarioVal) {
-  // Aceita Data como Date object, string "YYYY-MM-DD", "DD/MM/YYYY"
-  // Horario como Date object (hora do Sheets), string "HH:MM" ou "HH:MM:SS"
   try {
     let dateStr = "";
     if (dataVal instanceof Date) {
@@ -82,7 +79,6 @@ function parseDataHora(dataVal, horarioVal) {
 }
 
 function jsonResp(data) {
-  const cb = arguments.callee.caller; // não usado; JSONP tratado em doGet
   return ContentService
     .createTextOutput(JSON.stringify(data))
     .setMimeType(ContentService.MimeType.JSON);
@@ -124,7 +120,6 @@ function buildPayload() {
   const headers = rows[0].map(h => String(h).trim());
   const dataRows = rows.slice(1);
 
-  // Índices das colunas
   const iPrograma  = col(headers, "Programa");
   const iTipo      = col(headers, "Tipo");
   const iMaterial  = col(headers, "Material");
@@ -137,7 +132,6 @@ function buildPayload() {
   const iTopicoUrl = col(headers, "Topico_URL");
 
   const now = nowSaoPaulo();
-
   const schedule = [];
 
   dataRows.forEach((row, idx) => {
@@ -149,80 +143,68 @@ function buildPayload() {
     const startDt    = parseDataHora(dataVal, horarioVal);
     if (!startDt) return;
 
-    const programa  = String(row[iPrograma]  || "Empire TV").trim();
-    const tipo      = String(row[iTipo]      || "").trim();
-    const material  = String(row[iMaterial]  || "").trim();
-    const buff      = String(row[iBuff]      || "").trim();
-    const capaUrl   = String(row[iCapa]      || "").trim();
-    const topicoId  = String(row[iTopicoId]  || "").trim();
-    const topicoUrl = String(row[iTopicoUrl] || "").trim();
-
     schedule.push({
-      rowNum:     idx + 2,
-      startDt:    startDt,
-      programa,tipo,material,buff,capaUrl,topicoId,topicoUrl
+      rowNum:    idx + 2,
+      startDt:  startDt,
+      programa: String(row[iPrograma]  || "Empire TV").trim(),
+      tipo:     String(row[iTipo]      || "").trim(),
+      material: String(row[iMaterial]  || "").trim(),
+      buff:     String(row[iBuff]      || "").trim(),
+      capaUrl:  String(row[iCapa]      || "").trim(),
+      topicoId: String(row[iTopicoId]  || "").trim(),
+      topicoUrl:String(row[iTopicoUrl] || "").trim()
     });
   });
 
-  // Ordenar por data/hora
   schedule.sort((a, b) => a.startDt - b.startDt);
 
-  // Achar o que está ao vivo agora (dentro de 3h após o horário de início)
-  const MAX_LIVE_WINDOW = 3 * 60 * 60 * 1000; // 3 horas em ms
+  const MAX_LIVE_WINDOW = 3 * 60 * 60 * 1000;
   let current = null;
 
   for (let i = 0; i < schedule.length; i++) {
-    const item = schedule[i];
+    const item   = schedule[i];
     const diffMs = now - item.startDt;
 
     if (diffMs >= 0) {
-      // Já começou — está ao vivo se ainda dentro da janela
-      // Ou até o próximo item começar
       const nextStart = schedule[i+1] ? schedule[i+1].startDt : null;
       const liveUntil = nextStart || new Date(item.startDt.getTime() + MAX_LIVE_WINDOW);
 
       if (now < liveUntil) {
         current = { ...item, status: "broadcasting", seekOffset: Math.floor(diffMs / 1000) };
-        // Marca na planilha
         if (iStatus >= 0) {
           try { sheet.getRange(item.rowNum, iStatus + 1).setValue("Transmitindo"); } catch(e){}
         }
         break;
       } else {
-        // Já passou — marca concluído
         if (iStatus >= 0) {
           try { sheet.getRange(item.rowNum, iStatus + 1).setValue("Concluido"); } catch(e){}
         }
       }
     } else {
-      // Ainda não começou — upcoming se for o mais próximo no futuro
       if (!current) {
-        const secondsToStart = Math.ceil(-diffMs / 1000);
-        current = { ...item, status: "upcoming", secondsToStart };
+        current = { ...item, status: "upcoming", secondsToStart: Math.ceil(-diffMs / 1000) };
       }
       break;
     }
   }
 
-  if (!current) {
-    current = { status: "off", programa: "Empire TV" };
-  }
+  if (!current) current = { status: "off", programa: "Empire TV" };
 
-  // Formatar fullSchedule para o front
+  // fullSchedule — usa horarioStr para bater com home.tsx e grade.tsx
   const fullSchedule = schedule.map(item => ({
-    rowNum:    item.rowNum,
-    horario:   Utilities.formatDate(item.startDt, "America/Sao_Paulo", "HH:mm"),
-    data:      Utilities.formatDate(item.startDt, "America/Sao_Paulo", "dd/MM/yyyy"),
-    programa:  item.programa,
-    tipo:      item.tipo,
-    material:  item.material,
-    buff:      item.buff,
-    capaUrl:   item.capaUrl,
-    topicoId:  item.topicoId,
-    topicoUrl: item.topicoUrl
+    rowNum:     item.rowNum,
+    horarioStr: Utilities.formatDate(item.startDt, "America/Sao_Paulo", "HH:mm"),
+    data:       Utilities.formatDate(item.startDt, "America/Sao_Paulo", "dd/MM/yyyy"),
+    programa:   item.programa,
+    tipo:       item.tipo,
+    material:   item.material,
+    buff:       item.buff,
+    capaUrl:    item.capaUrl,
+    topicoId:   item.topicoId,
+    topicoUrl:  item.topicoUrl
   }));
 
-  // Formatar current para o front
+  // current — usa horarioStr também
   const currentOut = current.status === "off"
     ? { status: "off", programa: "Empire TV" }
     : {
@@ -234,7 +216,9 @@ function buildPayload() {
         capaUrl:        current.capaUrl,
         topicoId:       current.topicoId   || "",
         topicoUrl:      current.topicoUrl  || "",
-        videoUrl:       "",           // Drive não usado nesta estrutura
+        horarioStr:     Utilities.formatDate(current.startDt, "America/Sao_Paulo", "HH:mm"),
+        data:           Utilities.formatDate(current.startDt, "America/Sao_Paulo", "dd/MM/yyyy"),
+        videoUrl:       "",
         seekOffset:     current.seekOffset     || 0,
         secondsToStart: current.secondsToStart || 0
       };
