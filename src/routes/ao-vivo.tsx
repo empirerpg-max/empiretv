@@ -1,7 +1,7 @@
 import React, { useEffect, useRef, useState, useCallback } from "react";
 import Chat from "../components/Chat";
+import { fetchGAS } from "../lib/gas";
 
-const GAS_URL = "https://script.google.com/macros/s/AKfycby7OeFYuai1QoTEXD427-Kn_2KBvh3nakD4iKSuOji9-i3b7sK8DD59BHRBRc5Ow1YB/exec";
 const CHAT_URL = "https://empiretv-chat-backend.onrender.com";
 const LOGO = "https://i.imgur.com/6cL3Ca9.png";
 
@@ -30,7 +30,6 @@ export default function AoVivo() {
   const [countdown, setCountdown] = useState<number | null>(null);
   const [onlineCount, setOnlineCount] = useState(0);
 
-  // Estática analógica
   useEffect(() => {
     if (!useStatic) return;
     const canvas = staticCanvasRef.current;
@@ -54,8 +53,7 @@ export default function AoVivo() {
   const fetchAndSync = useCallback(async () => {
     setIsSyncing(true);
     try {
-      const res  = await fetch(GAS_URL);
-      const data = await res.json();
+      const data = await fetchGAS();
       if (data.status !== "success" || !data.current) { setUseStatic(true); setLoading(false); setIsSyncing(false); return; }
       const c: Transmission = data.current;
       setCurrent(c); setUseStatic(false);
@@ -95,7 +93,6 @@ export default function AoVivo() {
 
   return (
     <div className="ao-vivo-page">
-      {/* Header */}
       <header className="av-header">
         <div className="av-logo"><img src={LOGO} alt="Empire TV" /></div>
         <div className="av-header-right">
@@ -103,14 +100,12 @@ export default function AoVivo() {
         </div>
       </header>
 
-      {/* Mudo */}
       {muted && (
         <div className="av-muted-bar" onClick={() => { const v = videoRef.current; if (v) { v.muted = false; setMuted(false); v.play().catch(()=>{}); } }}>
           🔇 Áudio mutado — toque para ativar o som
         </div>
       )}
 
-      {/* Player */}
       <div className="av-player-wrap">
         {loading && <div className="av-overlay"><p className="av-loading">Sintonizando…</p></div>}
 
@@ -149,7 +144,6 @@ export default function AoVivo() {
         />
       </div>
 
-      {/* Info bar */}
       {current && !loading && !useStatic && current.status !== "upcoming" && (
         <div className="av-info">
           <div className="av-info-left">
@@ -161,7 +155,6 @@ export default function AoVivo() {
         </div>
       )}
 
-      {/* Sync bar */}
       {!loading && (
         <div className="av-sync-bar">
           <span className="av-sync-dot" />
@@ -172,7 +165,6 @@ export default function AoVivo() {
         </div>
       )}
 
-      {/* Chat — sempre visível quando há topicoId */}
       {current?.topicoId && (
         <Chat roomId={current.topicoId} backendUrl={CHAT_URL} />
       )}

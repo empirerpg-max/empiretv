@@ -1,8 +1,8 @@
 import { useEffect, useState } from "react";
 import { motion } from "motion/react";
 import type { Tab } from "../App";
+import { fetchGAS } from "../lib/gas";
 
-const GAS_URL = "https://script.google.com/macros/s/AKfycby7OeFYuai1QoTEXD427-Kn_2KBvh3nakD4iKSuOji9-i3b7sK8DD59BHRBRc5Ow1YB/exec";
 const BACKEND = "https://empiretv-chat-backend.onrender.com";
 const LOGO = "https://i.imgur.com/6cL3Ca9.png";
 
@@ -16,7 +16,6 @@ interface ArchiveItem {
   data: string; horario: string; capaUrl: string; totalMsgs: number;
 }
 
-// Variantes para stagger de cards
 const cardVariants = {
   hidden: { opacity: 0, y: 24, scale: 0.96 },
   show:   { opacity: 1, y: 0,  scale: 1 },
@@ -36,7 +35,7 @@ export default function Home({ onNavigate }: { onNavigate: (t: Tab) => void }) {
     (async () => {
       try {
         const [gasRes, archRes] = await Promise.all([
-          fetch(GAS_URL).then(r => r.json()).catch(() => ({})),
+          fetchGAS(),
           fetch(`${BACKEND}/archive`).then(r => r.json()).catch(() => ({})),
         ]);
         if (gasRes.current) setCurrent(gasRes.current);
@@ -51,7 +50,6 @@ export default function Home({ onNavigate }: { onNavigate: (t: Tab) => void }) {
 
   return (
     <div className="home-page">
-      {/* Header */}
       <header className="nf-header">
         <div className="nf-logo"><img src={LOGO} alt="Empire TV" /></div>
         <nav className="nf-nav">
@@ -64,7 +62,6 @@ export default function Home({ onNavigate }: { onNavigate: (t: Tab) => void }) {
 
       {loading && <div className="nf-loading">Carregando…</div>}
 
-      {/* Hero com fade + scale */}
       {!loading && hero && (
         <motion.div
           className="nf-hero"
@@ -108,7 +105,6 @@ export default function Home({ onNavigate }: { onNavigate: (t: Tab) => void }) {
       )}
       {!loading && !hero && <div className="nf-empty">Nenhuma transmissão programada.</div>}
 
-      {/* Próximos programas — stagger */}
       {schedule.length > 0 && (
         <section className="nf-section">
           <h2 className="nf-section-title">Próximos Programas</h2>
@@ -142,7 +138,6 @@ export default function Home({ onNavigate }: { onNavigate: (t: Tab) => void }) {
         </section>
       )}
 
-      {/* Arquivo — stagger */}
       {archive.length > 0 && (
         <section className="nf-section">
           <h2 className="nf-section-title">Transmissões Anteriores</h2>

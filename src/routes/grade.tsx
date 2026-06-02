@@ -1,7 +1,6 @@
 import { useEffect, useState } from "react";
 import { motion } from "motion/react";
-
-const GAS_URL = "https://script.google.com/macros/s/AKfycby7OeFYuai1QoTEXD427-Kn_2KBvh3nakD4iKSuOji9-i3b7sK8DD59BHRBRc5Ow1YB/exec";
+import { fetchGAS } from "../lib/gas";
 
 interface Programa {
   programa: string; tipo: string; material?: string;
@@ -15,8 +14,7 @@ export default function Grade() {
   const [erro,    setErro]    = useState("");
 
   useEffect(() => {
-    fetch(GAS_URL)
-      .then(r => r.json())
+    fetchGAS()
       .then(d => setItems(d.fullSchedule || []))
       .catch(() => setErro("Erro ao carregar a grade."))
       .finally(() => setLoading(false));
