@@ -1,56 +1,163 @@
-@import url('https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700&family=Space+Grotesk:wght@500;600;700&family=JetBrains+Mono:wght@400;500;700&display=swap');
-@import "tailwindcss";
+/* ============================================================
+   EMPIRE TV — App Shell CSS (mobile-first)
+   ============================================================ */
 
-@theme {
-  --font-sans: "Inter", ui-sans-serif, system-ui, sans-serif;
-  --font-display: "Space Grotesk", sans-serif;
-  --font-mono: "JetBrains Mono", monospace;
+*, *::before, *::after { box-sizing: border-box; margin: 0; padding: 0; }
 
-  --color-background: #060713; /* Deep imperial navy-black similar to Empire Hub */
-  --color-foreground: #f4f4f7;
-  --color-card: #0c0d21;       /* Sleek dark imperial card */
-  --color-card-foreground: #f4f4f7;
-  --color-popover: #0c0d21;
-  --color-popover-foreground: #f4f4f7;
-  --color-primary: #8b5cf6;    /* Electric Purple/Violet accent */
-  --color-primary-foreground: #ffffff;
-  --color-secondary: #3b82f6;  /* Royal Cobalt Blue */
-  --color-secondary-foreground: #ffffff;
-  --color-muted: #14152e;
-  --color-muted-foreground: #99a2c1;
-  --color-accent: #a78bfa;     /* Pastel Violet */
-  --color-accent-foreground: #111019;
-  --color-destructive: #ef4444;
-  --color-destructive-foreground: #ffffff;
-  --color-border: #1d1e3d;     /* Deep navy border */
-  --color-input: #1d1e3d;
-  --color-ring: #8b5cf6;
+:root {
+  --bg:       #0a0a0a;
+  --bg2:      #111111;
+  --bg3:      #1a1a1a;
+  --border:   #2a2a2a;
+  --purple:   #8b5cf6;
+  --purple2:  #6d28d9;
+  --red:      #ef4444;
+  --green:    #22c55e;
+  --text:     #e8e6e1;
+  --text2:    #aaaaaa;
+  --text3:    #666666;
+  --nav-h:    60px;
 }
 
-@layer base {
-  body {
-    background-color: var(--color-background);
-    color: var(--color-foreground);
-    font-family: var(--font-sans);
-  }
+html, body { background: var(--bg); color: var(--text); font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', sans-serif; height: 100%; overscroll-behavior: none; }
 
-  /* Blinking live effect animation */
-  @keyframes pulse-ring {
-    0% {
-      transform: scale(0.95);
-      box-shadow: 0 0 0 0 rgba(239, 68, 68, 0.7);
-    }
-    70% {
-      transform: scale(1.05);
-      box-shadow: 0 0 0 6px rgba(239, 68, 68, 0);
-    }
-    100% {
-      transform: scale(0.95);
-      box-shadow: 0 0 0 0 rgba(239, 68, 68, 0);
-    }
-  }
+/* ── App shell ── */
+.app-shell    { display: flex; flex-direction: column; height: 100dvh; overflow: hidden; }
+.app-content  { flex: 1; overflow-y: auto; overflow-x: hidden; -webkit-overflow-scrolling: touch; }
 
-  .live-badge-glow {
-    animation: pulse-ring 2s infinite;
-  }
-}
+/* ── NavBar ── */
+.navbar       { display: flex; height: var(--nav-h); background: var(--bg2); border-top: 1px solid var(--border); flex-shrink: 0; }
+.nav-btn      { flex: 1; display: flex; flex-direction: column; align-items: center; justify-content: center; gap: 3px; background: none; border: none; color: var(--text3); cursor: pointer; font-size: 10px; font-weight: 600; text-transform: uppercase; letter-spacing: .05em; transition: color .15s; -webkit-tap-highlight-color: transparent; }
+.nav-btn.active { color: var(--purple); }
+.nav-icon     { font-size: 20px; line-height: 1; }
+.nav-label    { font-size: 10px; }
+
+/* ── Ao Vivo ── */
+.ao-vivo-page { display: flex; flex-direction: column; min-height: calc(100dvh - var(--nav-h)); background: var(--bg); }
+.av-header    { display: flex; align-items: center; justify-content: space-between; padding: 10px 14px; background: var(--bg2); border-bottom: 1px solid var(--border); flex-shrink: 0; }
+.av-logo      { font-size: 15px; font-weight: 700; color: var(--purple); letter-spacing: .02em; }
+.av-header-right { display: flex; align-items: center; gap: 10px; }
+.av-online    { font-size: 12px; color: var(--text2); }
+.av-chat-btn  { background: var(--purple2); color: #fff; border: none; border-radius: 20px; padding: 5px 14px; font-size: 12px; font-weight: 700; cursor: pointer; }
+
+.av-muted-bar { background: #b45309; color: #fff; text-align: center; padding: 8px 12px; font-size: 13px; font-weight: 600; cursor: pointer; }
+
+.av-player-wrap { position: relative; width: 100%; background: #000; aspect-ratio: 16/9; flex-shrink: 0; }
+.av-video       { width: 100%; height: 100%; display: block; }
+.av-overlay     { position: absolute; inset: 0; z-index: 10; display: flex; flex-direction: column; align-items: center; justify-content: center; background: rgba(0,0,0,.85); }
+.av-loading     { color: #fff; font-size: 16px; }
+
+.av-countdown        { gap: 8px; padding: 16px; text-align: center; }
+.av-countdown-label  { color: var(--purple); font-size: 12px; font-weight: 700; text-transform: uppercase; letter-spacing: .1em; }
+.av-countdown-title  { color: #fff; font-size: 20px; font-weight: 800; margin: 4px 0; }
+.av-badge            { background: #1e1b4b; color: var(--purple); font-size: 11px; font-weight: 700; padding: 2px 10px; border-radius: 20px; }
+.av-timer            { font-size: 36px; font-weight: 900; font-family: monospace; color: var(--purple); margin-top: 12px; letter-spacing: .05em; }
+
+.av-static-wrap   { }
+.av-static-canvas { position: absolute; inset: 0; width: 100%; height: 100%; object-fit: cover; opacity: .75; }
+.av-static-card   { position: relative; z-index: 2; background: rgba(10,10,10,.9); border: 1px solid var(--purple); border-radius: 12px; padding: 20px 24px; text-align: center; max-width: 280px; }
+.av-static-title  { color: var(--red); font-size: 12px; font-weight: 700; text-transform: uppercase; display: block; margin-bottom: 6px; }
+.av-static-card p { color: var(--text2); font-size: 13px; margin-bottom: 14px; }
+.av-sync-btn      { background: var(--purple); color: #fff; border: none; border-radius: 8px; padding: 8px 18px; font-size: 13px; font-weight: 700; cursor: pointer; }
+.av-sync-btn:disabled { opacity: .5; }
+
+.av-info       { display: flex; align-items: center; justify-content: space-between; flex-wrap: wrap; gap: 6px; padding: 10px 14px; background: var(--bg2); border-top: 2px solid var(--purple); }
+.av-info-left  { display: flex; align-items: center; gap: 8px; flex-wrap: wrap; }
+.av-live-tag   { background: var(--red); color: #fff; font-size: 11px; font-weight: 700; padding: 2px 8px; border-radius: 4px; }
+.av-programa   { color: #fff; font-weight: 700; font-size: 14px; }
+.av-tipo       { background: #1e1b4b; color: var(--purple); font-size: 11px; padding: 2px 8px; border-radius: 12px; font-weight: 600; }
+.av-buff       { color: #a78bfa; font-size: 12px; }
+
+.av-sync-bar  { display: flex; align-items: center; gap: 8px; padding: 6px 14px; background: var(--bg2); border-top: 1px solid var(--border); font-size: 11px; color: var(--text3); }
+.av-sync-dot  { width: 7px; height: 7px; border-radius: 50%; background: var(--green); animation: ping 1.5s infinite; flex-shrink: 0; }
+.av-sync-link { margin-left: auto; background: none; border: none; color: var(--purple); font-size: 11px; font-weight: 700; cursor: pointer; text-transform: uppercase; letter-spacing: .05em; }
+.av-sync-link:disabled { opacity: .5; }
+
+@keyframes ping { 0%,100% { opacity:1 } 50% { opacity:.3 } }
+
+/* ── Chat ── */
+.chat-nome-screen  { display: flex; flex-direction: column; align-items: center; justify-content: center; padding: 32px 20px; gap: 14px; min-height: 200px; }
+.chat-nome-title   { color: var(--text); font-size: 15px; font-weight: 700; }
+.chat-nome-input   { width: 100%; max-width: 300px; background: var(--bg3); border: 1px solid var(--border); border-radius: 8px; padding: 10px 14px; color: var(--text); font-size: 15px; }
+.chat-nome-btn     { background: var(--purple); color: #fff; border: none; border-radius: 8px; padding: 10px 28px; font-size: 14px; font-weight: 700; cursor: pointer; }
+
+.chat-wrap        { display: flex; flex-direction: column; background: var(--bg2); border-top: 1px solid var(--border); max-height: 55vh; }
+.chat-header      { display: flex; align-items: center; justify-content: space-between; padding: 8px 14px; border-bottom: 1px solid var(--border); flex-shrink: 0; }
+.chat-title       { font-size: 13px; font-weight: 700; color: var(--text); }
+.chat-meta        { display: flex; align-items: center; gap: 8px; }
+.chat-online      { font-size: 11px; color: var(--text3); }
+.chat-status      { font-size: 11px; font-weight: 600; }
+.chat-status.open { color: var(--green); }
+.chat-status.connecting { color: #f59e0b; }
+.chat-status.closed     { color: var(--text3); }
+.chat-edit-nome   { background: none; border: none; cursor: pointer; font-size: 14px; color: var(--text3); }
+
+.chat-archived    { background: #1a1208; color: #92400e; font-size: 11px; font-weight: 600; text-align: center; padding: 5px; }
+
+.chat-messages    { flex: 1; overflow-y: auto; padding: 8px 12px; display: flex; flex-direction: column; gap: 6px; -webkit-overflow-scrolling: touch; }
+.chat-empty       { color: var(--text3); font-size: 13px; text-align: center; padding: 20px; }
+
+.chat-msg         { display: flex; flex-direction: column; gap: 1px; max-width: 85%; }
+.chat-msg.own     { align-self: flex-end; align-items: flex-end; }
+.chat-msg-nome    { font-size: 10px; font-weight: 700; color: var(--purple); }
+.chat-msg.own .chat-msg-nome { color: #60a5fa; }
+.chat-msg-texto   { background: var(--bg3); color: var(--text); font-size: 13px; padding: 6px 10px; border-radius: 10px; word-break: break-word; line-height: 1.4; }
+.chat-msg.own .chat-msg-texto { background: var(--purple2); }
+.chat-msg-hora    { font-size: 9px; color: var(--text3); }
+.chat-gif         { max-width: 160px; border-radius: 8px; }
+
+.chat-input-row   { display: flex; padding: 8px 10px; gap: 6px; border-top: 1px solid var(--border); flex-shrink: 0; }
+.chat-input       { flex: 1; background: var(--bg3); border: 1px solid var(--border); border-radius: 20px; padding: 8px 14px; color: var(--text); font-size: 14px; }
+.chat-input:disabled { opacity: .5; }
+.chat-send        { background: var(--purple); color: #fff; border: none; border-radius: 50%; width: 36px; height: 36px; font-size: 14px; cursor: pointer; flex-shrink: 0; display: flex; align-items: center; justify-content: center; }
+.chat-send:disabled { opacity: .4; }
+
+/* ── Grade ── */
+.grade-page    { padding: 16px 14px 24px; }
+.grade-title   { font-size: 17px; font-weight: 800; color: var(--text); margin-bottom: 14px; }
+.grade-loading,.grade-erro,.grade-vazia { padding: 40px 20px; text-align: center; color: var(--text2); font-size: 14px; }
+
+.grade-lista   { list-style: none; display: flex; flex-direction: column; gap: 10px; }
+.grade-item    { background: var(--bg2); border: 1px solid var(--border); border-radius: 12px; padding: 12px; position: relative; transition: border-color .15s; }
+.grade-item.atual { border-color: var(--purple); box-shadow: 0 0 0 1px var(--purple); }
+.grade-ao-vivo { position: absolute; top: 10px; right: 10px; background: var(--red); color: #fff; font-size: 10px; font-weight: 700; padding: 2px 7px; border-radius: 10px; animation: ping 1s infinite; }
+
+.grade-item-top   { display: flex; gap: 10px; align-items: flex-start; }
+.grade-capa       { width: 64px; height: 64px; object-fit: cover; border-radius: 8px; flex-shrink: 0; }
+.grade-item-info  { display: flex; flex-direction: column; gap: 4px; min-width: 0; }
+.grade-horario    { font-size: 12px; font-weight: 700; color: var(--purple); font-family: monospace; }
+.grade-programa   { font-size: 14px; font-weight: 700; color: var(--text); white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+.grade-tipo       { font-size: 11px; color: var(--purple); background: #1e1b4b; padding: 1px 8px; border-radius: 10px; align-self: flex-start; }
+.grade-material   { font-size: 12px; color: var(--text2); margin-top: 6px; }
+.grade-buff       { font-size: 11px; color: #a78bfa; margin-top: 4px; display: block; }
+
+/* ── Arquivo ── */
+.arquivo-page    { padding: 16px 14px 24px; }
+.arquivo-title   { font-size: 17px; font-weight: 800; color: var(--text); margin-bottom: 14px; }
+.arquivo-loading,.arquivo-erro { padding: 40px 20px; text-align: center; color: var(--text2); font-size: 14px; }
+.arquivo-vazio   { padding: 60px 20px; text-align: center; color: var(--text2); }
+.arquivo-vazio p { font-size: 14px; margin-bottom: 6px; }
+.arquivo-vazio-sub { font-size: 12px; color: var(--text3); }
+
+.arquivo-lista   { list-style: none; display: flex; flex-direction: column; gap: 1px; }
+.arquivo-item    { display: flex; align-items: center; gap: 12px; background: var(--bg2); padding: 12px; cursor: pointer; transition: background .1s; -webkit-tap-highlight-color: transparent; }
+.arquivo-item:first-child { border-radius: 12px 12px 0 0; }
+.arquivo-item:last-child  { border-radius: 0 0 12px 12px; }
+.arquivo-item:only-child  { border-radius: 12px; }
+.arquivo-item:active { background: var(--bg3); }
+.arquivo-thumb   { width: 56px; height: 56px; object-fit: cover; border-radius: 8px; flex-shrink: 0; }
+.arquivo-thumb-placeholder { width: 56px; height: 56px; background: var(--bg3); border-radius: 8px; display: flex; align-items: center; justify-content: center; font-size: 22px; flex-shrink: 0; }
+.arquivo-item-info  { flex: 1; min-width: 0; display: flex; flex-direction: column; gap: 3px; }
+.arquivo-programa   { font-size: 14px; font-weight: 700; color: var(--text); white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+.arquivo-tipo       { font-size: 11px; color: var(--purple); background: #1e1b4b; padding: 1px 8px; border-radius: 10px; align-self: flex-start; }
+.arquivo-data       { font-size: 11px; color: var(--text3); }
+.arquivo-stats      { font-size: 11px; color: var(--text3); }
+.arquivo-arrow      { color: var(--text3); font-size: 20px; flex-shrink: 0; }
+
+.arquivo-detail         { padding: 16px 14px 24px; }
+.arquivo-back           { background: none; border: none; color: var(--purple); font-size: 14px; font-weight: 700; cursor: pointer; margin-bottom: 14px; padding: 0; }
+.arquivo-detail-header  { display: flex; gap: 12px; align-items: flex-start; margin-bottom: 14px; }
+.arquivo-detail-capa    { width: 80px; height: 80px; object-fit: cover; border-radius: 10px; flex-shrink: 0; }
+.arquivo-detail-title   { font-size: 18px; font-weight: 800; color: var(--text); margin-bottom: 4px; }
+.arquivo-detail-tipo    { font-size: 11px; color: var(--purple); background: #1e1b4b; padding: 2px 10px; border-radius: 10px; display: inline-block; margin-bottom: 6px; }
+.arquivo-detail-meta    { font-size: 12px; color: var(--text2); margin-bottom: 2px; }
