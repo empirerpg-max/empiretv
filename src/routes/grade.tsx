@@ -12,8 +12,8 @@ interface Programa {
 
 function toKey(d: Date) {
   return [
-    String(d.getDate()).padStart(2, "0"),
-    String(d.getMonth() + 1).padStart(2, "0"),
+    String(d.getDate()).padStart(2, "00"),
+    String(d.getMonth() + 1).padStart(2, "00"),
     d.getFullYear(),
   ].join("/");
 }
@@ -39,7 +39,6 @@ export default function Grade() {
   const [items,    setItems]    = useState<Programa[]>([]);
   const [loading,  setLoading]  = useState(true);
   const [erro,     setErro]     = useState("");
-  const [debug,    setDebug]    = useState("aguardando...");
   const [diaSel,   setDiaSel]   = useState(hojeKey());
   const hoje = new Date();
   const [mesVis, setMesVis] = useState({ year: hoje.getFullYear(), month: hoje.getMonth() });
@@ -53,15 +52,8 @@ export default function Grade() {
           data: normalizeData(p.data),
         }));
         setItems(schedule);
-        setDebug(
-          `status=${d.status ?? "?"} | count=${raw.length} | hoje=${hojeKey()}` +
-          (raw[0] ? ` | primeiro: "${raw[0].data}" ${raw[0].programa}` : " | (vazio)")
-        );
       })
-      .catch(e => {
-        setErro("Erro: " + String(e));
-        setDebug("ERRO: " + String(e));
-      })
+      .catch(e => setErro("Erro: " + String(e)))
       .finally(() => setLoading(false));
   }, []);
 
@@ -97,11 +89,6 @@ export default function Grade() {
   return (
     <div className="grade-page">
       <h1 className="grade-title">Grade de Programação</h1>
-
-      {/* DEBUG sempre visível */}
-      <div style={{ background: "#1a1a2e", color: "#a470f0", fontSize: 10, padding: "6px 12px", margin: "0 0 8px", borderRadius: 8, wordBreak: "break-all" }}>
-        🔍 {debug}
-      </div>
 
       <div className="grade-cal-card">
         <div className="grade-cal-header">

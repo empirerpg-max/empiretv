@@ -17,14 +17,18 @@ interface Transmission {
   secondsToStart?: number;
 }
 
-/** Decide qual player usar com base no payload do GAS */
 function resolveMode(c: Transmission | null, loading: boolean): "loading"|"kick"|"video"|"upcoming"|"static" {
   if (loading)                             return "loading";
   if (!c || c.status === "off")            return "static";
   if (c.status === "upcoming")             return "upcoming";
-  // broadcasting:
   const isKick = !!c.topicoUrl?.includes("kick.com") || !c.videoUrl;
   return isKick ? "kick" : "video";
+}
+
+// Gera um roomId de fallback baseado na data+programa quando topicoId não vem do GAS
+function fallbackRoomId(c: Transmission): string {
+  const hoje = new Date().toISOString().slice(0, 10);
+  return `room-${hoje}-${(c.programa || "live").toLowerCase().replace(/\s+/g, "-")}`;
 }
 
 export default function AoVivo() {
@@ -41,6 +45,11 @@ export default function AoVivo() {
   const [onlineCount, setOnlineCount] = useState(0);
 
   const playerMode = resolveMode(current, loading);
+
+  // Chat aparece sempre que estiver broadcasting (kick ou video),
+  // usando topicoId do GAS ou fallback gerado localmente
+  const roomId  = current?.topicoId || (current ? fallbackRoomId(current) : null);
+  const showChat = (playerMode === "kick" || playerMode === "video") && !!roomId;
 
   // ── Estática analógica ──────────────────────────────────────
   useEffect(() => {
@@ -81,7 +90,6 @@ export default function AoVivo() {
       if (c.status === "upcoming" && c.secondsToStart)
         setCountdown(c.secondsToStart);
 
-      // Aplica seekOffset no <video> se for modo drive
       if (c.videoUrl && !c.topicoUrl?.includes("kick.com")) {
         const video = videoRef.current;
         if (!video) return;
@@ -128,10 +136,10 @@ export default function AoVivo() {
 
   // ── Polling online ──────────────────────────────────────────
   useEffect(() => {
-    if (!current?.topicoId) return;
+    if (!roomId) return;
     const poll = async () => {
       try {
-        const r = await fetch(`${CHAT_URL}/online/${current!.topicoId}`);
+        const r = await fetch(`${CHAT_URL}/online/${roomId}`);
         const d = await r.json();
         if (d.count !== undefined) setOnlineCount(d.count);
       } catch {}
@@ -139,13 +147,11 @@ export default function AoVivo() {
     poll();
     const t = setInterval(poll, 15000);
     return () => clearInterval(t);
-  }, [current?.topicoId]);
+  }, [roomId]);
 
   const pad = (n: number) => String(n).padStart(2, "0");
   const fmtCountdown = (s: number) =>
     `${pad(Math.floor(s / 3600))}:${pad(Math.floor((s % 3600) / 60))}:${pad(s % 60)}`;
-
-  const showChat = (playerMode === "kick" || playerMode === "video") && !!current?.topicoId;
 
   return (
     <div className="av-page">
@@ -273,11 +279,10 @@ export default function AoVivo() {
       {/* ── Chat ── */}
       {showChat && (
         <div className="av-chat-section">
-          <Chat roomId={current!.topicoId!} backendUrl={CHAT_URL} />
+          <Chat roomId={roomId!} backendUrl={CHAT_URL} />
         </div>
       )}
 
-      {/* Sem chat: placeholder enquanto loading */}
       {!showChat && !loading && playerMode !== "static" && playerMode !== "upcoming" && (
         <div className="av-chat-placeholder">
           <span>💬</span>
