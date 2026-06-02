@@ -1,622 +1,248 @@
 // ============================================================
-// EMPIRE TV — GOOGLE APPS SCRIPT COMPLETO E DINÂMICO
+// EMPIRE TV — GOOGLE APPS SCRIPT
+// Estrutura da aba: Agenda_TV
+// Colunas: Programa | Tipo | Material | Buff | Data | Horario
+//          Capa_URL | Status | Topico_ID | Topico_URL
 // ============================================================
 
-const SPREADSHEET_ID = "";
-// Nota: O streaming foi migrado para rodar integrado e nativo no próprio servidor Express do Cloud Run.
-// O frontend do player de TV faz o redirecionamento automático das requisições de mídia para o servidor de cache local.
-// Você não precisa mais do Cloudflare Worker ou do Cloudflare R2! Todo o download e streaming ocorrem na sua hospedagem.
-const PROXY_URL = "https://seu-dominio-aqui.run.app"; 
-const WORKER_SECRET = "garupapa@123";
+// ── Configuração ─────────────────────────────────────────────
+const SHEET_NAME     = "Agenda_TV";
+const SPREADSHEET_ID = ""; // deixe vazio para usar a planilha ativa
 
-// ============================================================
-// ENTRY POINT — API para o player
-// ============================================================
+// ── Utilitários ──────────────────────────────────────────────
+
+function getSheet() {
+  const ss = SPREADSHEET_ID
+    ? SpreadsheetApp.openById(SPREADSHEET_ID)
+    : SpreadsheetApp.getActiveSpreadsheet();
+  let sheet = ss.getSheetByName(SHEET_NAME);
+  if (!sheet) {
+    sheet = ss.insertSheet(SHEET_NAME);
+    initHeaders(sheet);
+  }
+  return sheet;
+}
+
+function initHeaders(sheet) {
+  const headers = ["Programa","Tipo","Material","Buff","Data","Horario","Capa_URL","Status","Topico_ID","Topico_URL"];
+  sheet.appendRow(headers);
+  sheet.getRange(1,1,1,headers.length)
+    .setBackground("#7c3aed").setFontColor("#ffffff").setFontWeight("bold");
+  sheet.autoResizeColumns(1, headers.length);
+}
+
+function col(headers, name) {
+  // Retorna índice (0-based) de forma case-insensitive
+  const n = name.trim().toLowerCase();
+  return headers.findIndex(h => String(h).trim().toLowerCase() === n);
+}
+
+function nowSaoPaulo() {
+  const now = new Date();
+  return new Date(now.toLocaleString("en-US", { timeZone: "America/Sao_Paulo" }));
+}
+
+function parseDataHora(dataVal, horarioVal) {
+  // Aceita Data como Date object, string "YYYY-MM-DD", "DD/MM/YYYY"
+  // Horario como Date object (hora do Sheets), string "HH:MM" ou "HH:MM:SS"
+  try {
+    let dateStr = "";
+    if (dataVal instanceof Date) {
+      const local = new Date(dataVal.toLocaleString("en-US", { timeZone: "America/Sao_Paulo" }));
+      const y = local.getFullYear();
+      const m = String(local.getMonth() + 1).padStart(2, "0");
+      const d = String(local.getDate()).padStart(2, "0");
+      dateStr = `${y}-${m}-${d}`;
+    } else {
+      const s = String(dataVal).trim();
+      if (/^\d{4}-\d{2}-\d{2}/.test(s)) {
+        dateStr = s.substring(0, 10);
+      } else if (/^\d{2}\/\d{2}\/\d{4}/.test(s)) {
+        const p = s.split("/");
+        dateStr = `${p[2]}-${p[1]}-${p[0]}`;
+      } else {
+        return null;
+      }
+    }
+
+    let timeStr = "00:00:00";
+    if (horarioVal instanceof Date) {
+      const local = new Date(horarioVal.toLocaleString("en-US", { timeZone: "America/Sao_Paulo" }));
+      timeStr = `${String(local.getHours()).padStart(2,"0")}:${String(local.getMinutes()).padStart(2,"0")}:${String(local.getSeconds()).padStart(2,"0")}`;
+    } else {
+      const s = String(horarioVal).trim();
+      const m = s.match(/^(\d{1,2}):(\d{2})(?::(\d{2}))?/);
+      if (m) timeStr = `${m[1].padStart(2,"0")}:${m[2]}:${m[3] ? m[3] : "00"}`;
+    }
+
+    return new Date(`${dateStr}T${timeStr}-03:00`);
+  } catch(e) {
+    return null;
+  }
+}
+
+function jsonResp(data) {
+  const cb = arguments.callee.caller; // não usado; JSONP tratado em doGet
+  return ContentService
+    .createTextOutput(JSON.stringify(data))
+    .setMimeType(ContentService.MimeType.JSON);
+}
+
+function jsonpResp(callback, data) {
+  return ContentService
+    .createTextOutput(`${callback}(${JSON.stringify(data)})`)
+    .setMimeType(ContentService.MimeType.JAVASCRIPT);
+}
+
+// ── doGet ─────────────────────────────────────────────────────
 
 function doGet(e) {
+  const callback = e && e.parameter && e.parameter.callback;
   try {
-    const sheet = getProgramSheet();
-    limparProgramasVencidosSet(sheet);
-
-    const rows = sheet.getDataRange().getValues();
-
-    if (rows.length <= 1) {
-      initializeExampleData(sheet);
-      return createJsonResponse({
-        status: "ok",
-        message: "Planilha inicializada. Recarregue o painel.",
-        current: null,
-        fullSchedule: []
-      });
-    }
-
-    const activeTimeline = buildActiveTimeline(rows);
-    const currentTransmission = findActiveVideoInTimeline(activeTimeline);
-    atualizarLinhasTransmitidas(sheet, activeTimeline, currentTransmission);
-
-    return createJsonResponse({
-      status: "success",
-      timestamp: new Date().toISOString(),
-      current: currentTransmission,
-      fullSchedule: activeTimeline
-    });
-
-  } catch (error) {
-    return createJsonResponse({ status: "error", message: error.toString() });
+    const result = buildPayload();
+    return callback ? jsonpResp(callback, result) : jsonResp(result);
+  } catch(err) {
+    const errObj = { status: "error", message: String(err) };
+    return callback ? jsonpResp(callback, errObj) : jsonResp(errObj);
   }
 }
 
-// ============================================================
-// AUXILIADORES DE EXTRAÇÃO INTELIGENTES E RESILIENTES
-// ============================================================
+// ── Payload principal ─────────────────────────────────────────
 
-function extractDriveId(val) {
-  if (!val) return "";
-  val = String(val).trim();
-  
-  if (val.includes("GMT") || val.includes("Time") || val.includes("Standard") || val.includes(":") || val.includes(" ") || val.includes("/")) {
-    if (!val.includes("http") && !val.includes("drive.google.com")) {
-      return "";
-    }
-  }
-  
-  const regexes = [
-    /\/d\/([a-zA-Z0-9_-]{25,45})/i,
-    /[?&]id=([a-zA-Z0-9_-]{25,45})/i,
-    /\/file\/d\/([a-zA-Z0-9_-]{25,45})/i
-  ];
-  for (var i = 0; i < regexes.length; i++) {
-    const match = val.match(regexes[i]);
-    if (match && match[1]) {
-      return match[1];
-    }
+function buildPayload() {
+  const sheet = getSheet();
+  const rows  = sheet.getDataRange().getValues();
+
+  if (rows.length <= 1) {
+    return {
+      status: "ok",
+      current: { status: "off", programa: "Empire TV" },
+      fullSchedule: []
+    };
   }
 
-  if (/^[a-zA-Z0-9_-]{25,45}$/.test(val)) {
-    return val;
-  }
-  
-  return "";
-}
-
-function getSecondsFromValue(val) {
-  if (val instanceof Date) {
-    try {
-      const timeStr = Utilities.formatDate(val, "America/Sao_Paulo", "HH:mm:ss");
-      const parts = timeStr.split(":");
-      return (parseInt(parts[0], 10) * 3600) + (parseInt(parts[1], 10) * 60) + parseInt(parts[2], 10);
-    } catch (e) {
-      return (val.getHours() * 3600) + (val.getMinutes() * 60) + val.getSeconds();
-    }
-  }
-  
-  const str = String(val || "").trim();
-  if (!str) return null;
-
-  if (str.includes("T")) {
-    const tParts = str.split("T")[1];
-    if (tParts) {
-      const match = tParts.match(/(\d{1,2}):(\d{2}):(\d{2})/);
-      if (match) {
-        return (parseInt(match[1], 10) * 3600) + (parseInt(match[2], 10) * 60) + parseInt(match[3], 10);
-      }
-    }
-  }
-
-  const matches = str.match(/(\d{1,2}):(\d{2})(?::(\d{2}))?/);
-  if (matches) {
-    const hours = parseInt(matches[1], 10);
-    const minutes = parseInt(matches[2], 10);
-    const seconds = matches[3] ? parseInt(matches[3], 10) : 0;
-    return (hours * 3600) + (minutes * 60) + seconds;
-  }
-  return null;
-}
-
-function findDriveIdInRow(row, headers) {
-  const preferredAliases = ["drive video", "link drive", "link do drive", "video", "drive id", "url", "status"];
-  for (var j = 0; j < preferredAliases.length; j++) {
-    const alias = preferredAliases[j];
-    for (var i = 0; i < headers.length; i++) {
-      const h = String(headers[i]).trim().toLowerCase().replace(/_/g, " ");
-      if (h === alias || h.includes(alias)) {
-        const val = String(row[i] || "").trim();
-        const id = extractDriveId(val);
-        if (id) return id;
-      }
-    }
-  }
-  for (var i = 0; i < row.length; i++) {
-    const val = String(row[i] || "").trim();
-    const id = extractDriveId(val);
-    if (id) return id;
-  }
-  return "";
-}
-
-function findHorarioSecondsInRow(row, headers) {
-  const aliases = ["horario", "horário", "hora", "data", "schedule", "time"];
-  for (var j = 0; j < aliases.length; j++) {
-    const alias = aliases[j];
-    for (var i = 0; i < headers.length; i++) {
-      const h = String(headers[i]).trim().toLowerCase().replace(/_/g, " ");
-      if (h === alias || h.includes(alias)) {
-        const secs = getSecondsFromValue(row[i]);
-        if (secs !== null && !isNaN(secs)) return secs;
-      }
-    }
-  }
-  for (var i = 0; i < row.length; i++) {
-    const val = row[i];
-    const secs = getSecondsFromValue(val);
-    if (secs !== null && !isNaN(secs)) return secs;
-  }
-  return null;
-}
-
-function findDurationSecondsInRow(row, headers) {
-  const aliases = ["duracao segundos", "duracao", "duraçao", "duration", "tempo", "segundos"];
-  for (var j = 0; j < aliases.length; j++) {
-    const alias = aliases[j];
-    for (var i = 0; i < headers.length; i++) {
-      const h = String(headers[i]).trim().toLowerCase().replace(/_/g, " ");
-      if (h === alias || h.includes(alias)) {
-        const val = parseInt(row[i], 10);
-        if (!isNaN(val) && val > 0) return val;
-      }
-    }
-  }
-  for (var i = 0; i < row.length; i++) {
-    const val = row[i];
-    if (val !== "" && !isNaN(val)) {
-      const num = parseInt(val, 10);
-      if (num > 10 && num < 86400) return num;
-    }
-  }
-  return 600;
-}
-
-function findMetadataInRow(row, headers, fieldType) {
-  var aliases = [];
-  var defaultVal = "";
-  if (fieldType === "programa") {
-    aliases = ["programa", "show", "titulo", "título"];
-    defaultVal = "Empire TV";
-  } else if (fieldType === "tipo") {
-    aliases = ["tipo", "categoria", "type"];
-    defaultVal = "Clipe";
-  } else if (fieldType === "material") {
-    aliases = ["material tocando", "musica", "música", "faixa", "track", "song"];
-    defaultVal = "Música em Transmissão";
-  } else if (fieldType === "buff") {
-    aliases = ["buff rpg", "buff", "bonus", "bônus"];
-    defaultVal = "Sem Buff Ativo";
-  }
-
-  for (var j = 0; j < aliases.length; j++) {
-    var alias = aliases[j];
-    for (var i = 0; i < headers.length; i++) {
-      var h = String(headers[i]).trim().toLowerCase().replace(/_/g, " ");
-      if (h === alias || h.includes(alias)) {
-        return String(row[i] || "").trim() || defaultVal;
-      }
-    }
-  }
-  return defaultVal;
-}
-
-// ============================================================
-// TIMELINE — Monta a fila de vídeos estruturada cronologicamente
-// ============================================================
-
-function buildActiveTimeline(rows) {
-  if (rows.length <= 1) return [];
-  const headers = rows[0];
+  const headers = rows[0].map(h => String(h).trim());
   const dataRows = rows.slice(1);
 
-  const parsedItems = dataRows.map((row, index) => {
-    const driveVideoId = findDriveIdInRow(row, headers);
-    if (!driveVideoId) return null;
+  // Índices das colunas
+  const iPrograma  = col(headers, "Programa");
+  const iTipo      = col(headers, "Tipo");
+  const iMaterial  = col(headers, "Material");
+  const iBuff      = col(headers, "Buff");
+  const iData      = col(headers, "Data");
+  const iHorario   = col(headers, "Horario");
+  const iCapa      = col(headers, "Capa_URL");
+  const iStatus    = col(headers, "Status");
+  const iTopicoId  = col(headers, "Topico_ID");
+  const iTopicoUrl = col(headers, "Topico_URL");
 
-    const configuredStartInSeconds = findHorarioSecondsInRow(row, headers);
-    const durationSeconds = findDurationSecondsInRow(row, headers);
+  const now = nowSaoPaulo();
 
-    const programa = findMetadataInRow(row, headers, "programa");
-    const tipo = findMetadataInRow(row, headers, "tipo");
-    const material_tocando = findMetadataInRow(row, headers, "material");
-    const buff_rpg = findMetadataInRow(row, headers, "buff");
+  const schedule = [];
 
-    return {
-      id: "prog_" + (index + 2),
-      rowNum: index + 2,
-      drive_video_id: driveVideoId,
-      configuredStartInSeconds: configuredStartInSeconds,
-      durationSeconds: durationSeconds,
-      programa: programa,
-      tipo: tipo,
-      material_tocando: material_tocando,
-      buff_rpg: buff_rpg
-    };
-  }).filter(item => item !== null);
+  dataRows.forEach((row, idx) => {
+    const rowStatus = String(row[iStatus] || "").trim().toLowerCase();
+    if (["concluido","concluído","cancelado"].includes(rowStatus)) return;
 
-  const timeline = [];
-  let currentTimelineInSeconds = 0;
+    const dataVal    = iData    >= 0 ? row[iData]    : "";
+    const horarioVal = iHorario >= 0 ? row[iHorario] : "";
+    const startDt    = parseDataHora(dataVal, horarioVal);
+    if (!startDt) return;
 
-  for (var i = 0; i < parsedItems.length; i++) {
-    const current = parsedItems[i];
-    let actualStartInSeconds = null;
+    const programa  = String(row[iPrograma]  || "Empire TV").trim();
+    const tipo      = String(row[iTipo]      || "").trim();
+    const material  = String(row[iMaterial]  || "").trim();
+    const buff      = String(row[iBuff]      || "").trim();
+    const capaUrl   = String(row[iCapa]      || "").trim();
+    const topicoId  = String(row[iTopicoId]  || "").trim();
+    const topicoUrl = String(row[iTopicoUrl] || "").trim();
 
-    if (current.configuredStartInSeconds !== null && !isNaN(current.configuredStartInSeconds)) {
-      // Tem horário agendado de forma clara e explícita (ponto de ancoragem na programação)
-      actualStartInSeconds = current.configuredStartInSeconds;
-    } else {
-      // Sem horário fixo (vazio ou "Pendente" / "Fila").
-      // Encadear como fila imediata se o vídeo anterior pertencer ao MESMO programa!
-      if (timeline.length > 0) {
-        const lastInTimeline = timeline[timeline.length - 1];
-        if (lastInTimeline.programa === current.programa) {
-          actualStartInSeconds = lastInTimeline.endInSeconds;
+    schedule.push({
+      rowNum:     idx + 2,
+      startDt:    startDt,
+      programa,tipo,material,buff,capaUrl,topicoId,topicoUrl
+    });
+  });
+
+  // Ordenar por data/hora
+  schedule.sort((a, b) => a.startDt - b.startDt);
+
+  // Achar o que está ao vivo agora (dentro de 3h após o horário de início)
+  const MAX_LIVE_WINDOW = 3 * 60 * 60 * 1000; // 3 horas em ms
+  let current = null;
+
+  for (let i = 0; i < schedule.length; i++) {
+    const item = schedule[i];
+    const diffMs = now - item.startDt;
+
+    if (diffMs >= 0) {
+      // Já começou — está ao vivo se ainda dentro da janela
+      // Ou até o próximo item começar
+      const nextStart = schedule[i+1] ? schedule[i+1].startDt : null;
+      const liveUntil = nextStart || new Date(item.startDt.getTime() + MAX_LIVE_WINDOW);
+
+      if (now < liveUntil) {
+        current = { ...item, status: "broadcasting", seekOffset: Math.floor(diffMs / 1000) };
+        // Marca na planilha
+        if (iStatus >= 0) {
+          try { sheet.getRange(item.rowNum, iStatus + 1).setValue("Transmitindo"); } catch(e){}
+        }
+        break;
+      } else {
+        // Já passou — marca concluído
+        if (iStatus >= 0) {
+          try { sheet.getRange(item.rowNum, iStatus + 1).setValue("Concluido"); } catch(e){}
         }
       }
-    }
-
-    // Se conseguimos calcular uma hora de início no ar para este vídeo
-    if (actualStartInSeconds !== null) {
-      if (actualStartInSeconds < currentTimelineInSeconds) {
-        actualStartInSeconds = currentTimelineInSeconds;
+    } else {
+      // Ainda não começou — upcoming se for o mais próximo no futuro
+      if (!current) {
+        const secondsToStart = Math.ceil(-diffMs / 1000);
+        current = { ...item, status: "upcoming", secondsToStart };
       }
-
-      const actualEndInSeconds = actualStartInSeconds + current.durationSeconds;
-      currentTimelineInSeconds = actualEndInSeconds;
-
-      const startHour = Math.floor(actualStartInSeconds / 3600);
-      const startMin = Math.floor((actualStartInSeconds % 3600) / 60);
-      const startSec = actualStartInSeconds % 60;
-      const estimatedStartTimeStr =
-        String(startHour).padStart(2, "0") + ":" +
-        String(startMin).padStart(2, "0") + ":" +
-        String(startSec).padStart(2, "0");
-
-      const videoIdClean = current.drive_video_id;
-      const videoUrl = videoIdClean.startsWith("http")
-        ? videoIdClean
-        : `${PROXY_URL}/video?file=video_${videoIdClean}.mp4&secret=${WORKER_SECRET}`;
-
-      timeline.push({
-        id: current.id,
-        rowNum: current.rowNum,
-        horarioCalculado: estimatedStartTimeStr,
-        startInSeconds: actualStartInSeconds,
-        endInSeconds: actualEndInSeconds,
-        durationSeconds: current.durationSeconds,
-        link_drive: videoUrl,
-        drive_video_id: videoIdClean,
-        programa: current.programa,
-        tipo: current.tipo,
-        material_tocando: current.material_tocando,
-        buff_rpg: current.buff_rpg
-      });
-    }
-  }
-
-  return timeline;
-}
-
-// ============================================================
-// DETECÇÃO — Qual vídeo está no ar agora ou próximo na fila
-// ============================================================
-
-function findActiveVideoInTimeline(timeline) {
-  if (timeline.length === 0) {
-    return {
-      status: "rotation",
-      programa: "Playlist Geral",
-      tipo: "Geral",
-      materialTocando: "Theme Lofi",
-      buff: "+10% Regeneração de Mana",
-      videoUrl: "https://commondatastorage.googleapis.com/gtv-videos-bucket/sample/BigBuckBunny.mp4",
-      seekOffset: 0,
-      durationSeconds: 600,
-      isBackup: true
-    };
-  }
-
-  const nowInSeconds = getSecondsToday();
-  let activeVideo = null;
-
-  // Busca se há algum vídeo sintonizado exatamente agora no ar
-  for (var i = 0; i < timeline.length; i++) {
-    const item = timeline[i];
-    if (nowInSeconds >= item.startInSeconds && nowInSeconds < item.endInSeconds) {
-      activeVideo = item;
       break;
     }
   }
 
-  // Se nenhum vídeo estiver passando agora, checamos se há um PRÓXIMO programa agendado para hoje.
-  // Caso sim, mostramos o status de "upcoming" com contagem regressiva impecável!
-  if (!activeVideo) {
-    let nextItem = null;
-    for (var i = 0; i < timeline.length; i++) {
-      if (timeline[i].startInSeconds > nowInSeconds) {
-        nextItem = timeline[i];
-        break;
-      }
-    }
+  if (!current) {
+    current = { status: "off", programa: "Empire TV" };
+  }
 
-    if (nextItem) {
-      const secondsToStart = nextItem.startInSeconds - nowInSeconds;
-      return {
-        status: "upcoming",
-        programa: nextItem.programa || "Empire TV",
-        tipo: nextItem.tipo || "Geral",
-        materialTocando: nextItem.material_tocando || "Abertura Oficial",
-        buff: nextItem.buff_rpg || "Sem Buff Ativo",
-        videoUrl: "",
-        startedAt: nextItem.horarioCalculado,
-        durationSeconds: nextItem.durationSeconds || 0,
-        seekOffset: 0,
-        secondsToStart: secondsToStart,
-        isBackup: false
+  // Formatar fullSchedule para o front
+  const fullSchedule = schedule.map(item => ({
+    rowNum:    item.rowNum,
+    horario:   Utilities.formatDate(item.startDt, "America/Sao_Paulo", "HH:mm"),
+    data:      Utilities.formatDate(item.startDt, "America/Sao_Paulo", "dd/MM/yyyy"),
+    programa:  item.programa,
+    tipo:      item.tipo,
+    material:  item.material,
+    buff:      item.buff,
+    capaUrl:   item.capaUrl,
+    topicoId:  item.topicoId,
+    topicoUrl: item.topicoUrl
+  }));
+
+  // Formatar current para o front
+  const currentOut = current.status === "off"
+    ? { status: "off", programa: "Empire TV" }
+    : {
+        status:         current.status,
+        programa:       current.programa,
+        tipo:           current.tipo,
+        material:       current.material,
+        buff:           current.buff,
+        capaUrl:        current.capaUrl,
+        topicoId:       current.topicoId   || "",
+        topicoUrl:      current.topicoUrl  || "",
+        videoUrl:       "",           // Drive não usado nesta estrutura
+        seekOffset:     current.seekOffset     || 0,
+        secondsToStart: current.secondsToStart || 0
       };
-    }
-  }
 
-  if (!activeVideo) {
-    // Modo Loop Rotativo inteligente após o término de toda a grade
-    const lastItem = timeline[timeline.length - 1];
-    if (nowInSeconds > lastItem.endInSeconds) {
-      const totalDuration = lastItem.endInSeconds - timeline[0].startInSeconds;
-      const secSinceEnd = nowInSeconds - lastItem.endInSeconds;
-      const relativeOffset = secSinceEnd % totalDuration;
-      const targetSec = timeline[0].startInSeconds + relativeOffset;
-
-      for (var i = 0; i < timeline.length; i++) {
-        const item = timeline[i];
-        if (targetSec >= item.startInSeconds && targetSec < item.endInSeconds) {
-          return buildResponsePayload(item, targetSec - item.startInSeconds);
-        }
-      }
-    }
-    activeVideo = timeline[0];
-  }
-
-  if (activeVideo) {
-    const seekOffset = nowInSeconds - activeVideo.startInSeconds;
-    return buildResponsePayload(activeVideo, Math.max(seekOffset, 0));
-  }
-}
-
-function buildResponsePayload(item, seekOffset) {
   return {
-    status: "broadcasting",
-    rowNum: item.rowNum,
-    programa: item.programa || "Empire TV",
-    tipo: item.tipo || "Geral",
-    materialTocando: item.material_tocando || "Música no Ar",
-    buff: item.buff_rpg || "Sem Buff Ativo",
-    videoUrl: item.link_drive,
-    drive_video_id: item.drive_video_id,
-    startedAt: item.horarioCalculado,
-    durationSeconds: item.durationSeconds,
-    seekOffset: seekOffset < item.durationSeconds ? seekOffset : (seekOffset % item.durationSeconds),
-    isBackup: false
+    status:       "success",
+    timestamp:    new Date().toISOString(),
+    current:      currentOut,
+    fullSchedule: fullSchedule
   };
-}
-
-// ============================================================
-// STATUS — Atualiza linhas na planilha
-// ============================================================
-
-function atualizarLinhasTransmitidas(sheet, timeline, currentVideo) {
-  try {
-    if (!currentVideo || currentVideo.isBackup) return;
-
-    const rows = sheet.getDataRange().getValues();
-    const headers = rows[0];
-    const statusColIdx = headers.findIndex(h => String(h).trim().toLowerCase() === "status") + 1;
-    if (statusColIdx <= 0) return;
-
-    const currentIdx = currentVideo.rowNum;
-    const nowInSeconds = getSecondsToday();
-
-    if (currentIdx && currentIdx <= rows.length) {
-      const currentStatus = String(rows[currentIdx - 1][statusColIdx - 1]).trim().toLowerCase();
-      if (currentStatus !== "transmitindo" && currentStatus !== "concluido") {
-        sheet.getRange(currentIdx, statusColIdx).setValue("Transmitindo");
-      }
-    }
-
-    timeline.forEach(function(item) {
-      if (item.rowNum !== currentIdx && item.rowNum <= rows.length) {
-        if (nowInSeconds > item.endInSeconds) {
-          const itemStatus = String(rows[item.rowNum - 1][statusColIdx - 1]).trim().toLowerCase();
-          if (itemStatus !== "concluido") {
-            sheet.getRange(item.rowNum, statusColIdx).setValue("Concluido");
-          }
-        }
-      }
-    });
-  } catch (e) {
-    Logger.log("Erro ao atualizar status: " + e);
-  }
-}
-
-// ============================================================
-// AUTOLIMPEZA — Remove linhas antigas da planilha
-// ============================================================
-
-function limparProgramasVencidosSet(sheet) {
-  try {
-    const rows = sheet.getDataRange().getValues();
-    if (rows.length <= 1) return;
-
-    const headers = rows[0];
-    const statusColIdx = headers.findIndex(h => String(h).trim().toLowerCase() === "status") + 1;
-    const horarioColIdx = headers.findIndex(h => String(h).trim().toLowerCase() === "horario") + 1;
-    if (statusColIdx <= 0 || horarioColIdx <= 0) return;
-
-    const nowInSeconds = getSecondsToday();
-
-    for (var i = rows.length - 1; i >= 1; i--) {
-      const row = rows[i];
-      const statusVal = String(row[statusColIdx - 1]).trim().toLowerCase();
-      let deveApagar = false;
-
-      if (statusVal === "concluido" || statusVal === "concluído") {
-        deveApagar = true;
-      } else {
-        const itemStartSeconds = getSecondsFromValue(row[horarioColIdx - 1]);
-        if (itemStartSeconds !== null && !isNaN(itemStartSeconds)) {
-          const duracaoIdx = headers.findIndex(h => String(h).trim().toLowerCase() === "duracao_segundos");
-          let duracaoSec = 600;
-          if (duracaoIdx >= 0) {
-            duracaoSec = parseInt(row[duracaoIdx], 10) || 600;
-          }
-          if (nowInSeconds > (itemStartSeconds + duracaoSec + 1800)) {
-            deveApagar = true;
-          }
-        }
-      }
-
-      if (deveApagar) sheet.deleteRow(i + 1);
-    }
-  } catch (e) {
-    Logger.log("Erro na autolimpeza: " + e);
-  }
-}
-
-// ============================================================
-// COMPATIBILIDADE DE PRÉ-CARGA DE WORKERS (OPCIONAL/HISTÓRICO)
-// ============================================================
-
-function preCarregarProximosVideos() {
-  const sheet = getProgramSheet();
-  const rows = sheet.getDataRange().getValues();
-  if (rows.length <= 1) return;
-
-  const headers = rows[0];
-  const nowSec = getSecondsToday();
-  const limitePreCarga = nowSec + 3600; 
-  const statusColIdx = headers.findIndex(h => String(h).trim().toLowerCase() === "status") + 1;
-  if (statusColIdx <= 0) return;
-
-  rows.slice(1).forEach((row, i) => {
-    const status = String(row[statusColIdx - 1] || "").toLowerCase();
-    if (["concluido", "transmitindo", "carregado"].includes(status)) return;
-
-    const itemSec = findHorarioSecondsInRow(row, headers);
-    if (itemSec === null || isNaN(itemSec)) return;
-
-    if (itemSec < nowSec || itemSec > limitePreCarga) return;
-
-    const driveId = findDriveIdInRow(row, headers);
-    if (!driveId || driveId.startsWith("http")) return;
-
-    const filename = `video_${driveId}.mp4`;
-
-    try {
-      const resp = UrlFetchApp.fetch(
-        `${PROXY_URL}/preload?id=${driveId}&name=${encodeURIComponent(filename)}&secret=${WORKER_SECRET}`,
-        { muteHttpExceptions: true }
-      );
-      const result = JSON.parse(resp.getContentText());
-
-      if (result.ok) {
-        sheet.getRange(i + 2, statusColIdx).setValue("Carregado");
-        Logger.log(`✅ Pré-carregado: ${filename}`);
-      } else {
-        Logger.log(`⚠️ Falha pré-carga: ${filename} — ${resp.getContentText()}`);
-      }
-    } catch (e) {
-      Logger.log(`❌ Erro pré-carga ${driveId}: ${e}`);
-    }
-  });
-}
-
-function deletarVideosTransmitidos() {
-  const sheet = getProgramSheet();
-  const rows = sheet.getDataRange().getValues();
-  if (rows.length <= 1) return;
-
-  const headers = rows[0];
-  const statusColIdx = headers.findIndex(h => String(h).trim().toLowerCase() === "status") + 1;
-  if (statusColIdx <= 0) return;
-
-  rows.slice(1).forEach((row) => {
-    const status = String(row[statusColIdx - 1] || "").toLowerCase();
-    if (status !== "concluido") return;
-
-    const driveId = findDriveIdInRow(row, headers);
-    if (!driveId || driveId.startsWith("http")) return;
-
-    const filename = `video_${driveId}.mp4`;
-
-    try {
-      UrlFetchApp.fetch(
-        `${PROXY_URL}/delete?name=${encodeURIComponent(filename)}&secret=${WORKER_SECRET}`,
-        { muteHttpExceptions: true }
-      );
-      Logger.log(`🗑️ Deletado do R2: ${filename}`);
-    } catch (e) {
-      Logger.log(`❌ Erro ao deletar ${filename}: ${e}`);
-    }
-  });
-}
-
-function configurarTriggers() {
-  ScriptApp.getProjectTriggers().forEach(function(t) {
-    ScriptApp.deleteTrigger(t);
-  });
-
-  // O novo servidor do Cloud Run faz a pré-carga e cache em background de forma contínua a cada 45 segundos por conta própria.
-  // Você não precisa ativar triggers complexos se desejar, mas caso queira, estes são os triggers legados:
-  ScriptApp.newTrigger("preCarregarProximosVideos")
-    .timeBased().everyMinutes(30).create();
-
-  ScriptApp.newTrigger("deletarVideosTransmitidos")
-    .timeBased().everyMinutes(30).create();
-
-  Logger.log("✅ Triggers configurados com sucesso!");
-}
-
-// ============================================================
-// UTILITÁRIOS
-// ============================================================
-
-function getSecondsToday() {
-  const now = new Date();
-  const localTime = new Date(now.toLocaleString("en-US", { timeZone: "America/Sao_Paulo" }));
-  return (localTime.getHours() * 3600) + (localTime.getMinutes() * 60) + localTime.getSeconds();
-}
-
-function getProgramSheet() {
-  const ss = SPREADSHEET_ID
-    ? SpreadsheetApp.openById(SPREADSHEET_ID)
-    : SpreadsheetApp.getActiveSpreadsheet();
-  let sheet = ss.getSheetByName("Programacao_RPG");
-  if (!sheet) sheet = ss.insertSheet("Programacao_RPG");
-  return sheet;
-}
-
-function initializeExampleData(sheet) {
-  const headers = ["Drive_Video_ID", "Horario", "Status", "Programa", "Tipo", "Material_Tocando", "Buff_RPG", "Duracao_Segundos"];
-  sheet.appendRow(headers);
-
-  const now = new Date();
-  const localTime = new Date(now.toLocaleString("en-US", { timeZone: "America/Sao_Paulo" }));
-  const todayYMD = localTime.getFullYear() + "-" +
-    String(localTime.getMonth() + 1).padStart(2, "0") + "-" +
-    String(localTime.getDate()).padStart(2, "0");
-
-  sheet.appendRow(["ID_DO_DRIVE_AQUI", todayYMD + " 20:00", "Pendente", "Empire Hits", "Top 10", "Música Exemplo", "+15 MP", "300"]);
-  sheet.appendRow(["ID_DO_DRIVE_AQUI_2", todayYMD + " 20:05", "Pendente", "Empire Hits", "Top 10", "Música 2", "+10 HP", "240"]);
-
-  sheet.getRange(1, 1, 1, 8).setBackground("#8b5cf6").setFontColor("#ffffff").setFontWeight("bold");
-  sheet.autoResizeColumns(1, 8);
-}
-
-function createJsonResponse(data) {
-  return ContentService.createTextOutput(JSON.stringify(data))
-    .setMimeType(ContentService.MimeType.JSON);
 }
