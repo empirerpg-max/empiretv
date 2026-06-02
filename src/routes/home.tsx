@@ -2,6 +2,7 @@ import { useEffect, useState } from "react";
 import { motion, AnimatePresence } from "motion/react";
 import type { Tab } from "../App";
 import { fetchGAS } from "../lib/gas";
+import { driveImg } from "../lib/driveImg";
 
 const BACKEND = "https://empiretv-chat-backend.onrender.com";
 const LOGO    = "https://i.imgur.com/6cL3Ca9.png";
@@ -80,7 +81,7 @@ export default function Home({ onNavigate }: { onNavigate: (t: Tab) => void }) {
                 <motion.div
                   key={heroIdx}
                   className="nf-hero-bg"
-                  style={{ backgroundImage: `url(${hero.capaUrl})` }}
+                  style={{ backgroundImage: `url(${driveImg(hero.capaUrl)})` }}
                   initial={{ opacity: 0, scale: 1.04 }}
                   animate={{ opacity: 1, scale: 1 }}
                   exit={{ opacity: 0 }}
@@ -128,7 +129,6 @@ export default function Home({ onNavigate }: { onNavigate: (t: Tab) => void }) {
               )}
             </div>
           ) : (
-            /* Banner vazio quando não há capa */
             <div className="nf-hero-empty">
               <div className="nf-hero-empty-orb" />
               <div className="nf-hero-content" style={{ position: "relative", padding: "40px 16px 24px" }}>
@@ -158,7 +158,7 @@ export default function Home({ onNavigate }: { onNavigate: (t: Tab) => void }) {
                 initial={{ opacity: 0, y: 16 }} animate={{ opacity: 1, y: 0 }}
               >
                 {current.capaUrl
-                  ? <img src={current.capaUrl} alt={current.programa} className="nf-live-card-img" />
+                  ? <img src={driveImg(current.capaUrl)} alt={current.programa} className="nf-live-card-img" loading="lazy" />
                   : <div className="nf-live-card-placeholder">📺</div>}
                 <div className="nf-live-card-overlay">
                   <span className="nf-live-card-badge">◉ AO VIVO</span>
@@ -187,7 +187,7 @@ export default function Home({ onNavigate }: { onNavigate: (t: Tab) => void }) {
                     onClick={() => onNavigate("grade")}
                   >
                     {p.capaUrl
-                      ? <img src={p.capaUrl} alt={p.programa} className="nf-card-img" />
+                      ? <img src={driveImg(p.capaUrl)} alt={p.programa} className="nf-card-img" loading="lazy" />
                       : <div className="nf-card-placeholder">📺</div>}
                     <div className="nf-card-info">
                       <span className="nf-card-horario">{p.horarioStr || p.data || "—"}</span>
@@ -216,7 +216,7 @@ export default function Home({ onNavigate }: { onNavigate: (t: Tab) => void }) {
                     onClick={() => onNavigate("arquivo")}
                   >
                     {item.capaUrl
-                      ? <img src={item.capaUrl} alt={item.programa} className="nf-card-img" />
+                      ? <img src={driveImg(item.capaUrl)} alt={item.programa} className="nf-card-img" loading="lazy" />
                       : <div className="nf-card-placeholder">🎬</div>}
                     <div className="nf-card-info">
                       <span className="nf-card-horario">{item.data}</span>
