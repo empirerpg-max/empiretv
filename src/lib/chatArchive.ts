@@ -2,7 +2,7 @@
  * chatArchive.ts
  * Chamado quando status muda para "finalizado" no GAS.
  * 1. Busca todas as mensagens do banco
- * 2. Salva em chat_archives (Supabase)
+ * 2. Salva em chat_archives (Supabase) — SOMENTE se houver ≥1 mensagem
  * 3. Envia resumo para o Google Sheets via GAS webhook
  * 4. Apaga mensagens da sala no banco (libera espaço)
  * 5. Notifica todos no canal broadcast que a sala fechou
@@ -14,12 +14,12 @@ const SUPABASE_ANON = "eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJpc3MiOiJzdXBhYmFz
 const sb = createClient(SUPABASE_URL, SUPABASE_ANON);
 
 // URL do GAS que recebe o histórico do chat e salva na planilha
-// Aponte para seu webapp GAS com doPost habilitado
 const GAS_WEBHOOK = import.meta.env.VITE_GAS_CHAT_WEBHOOK || "";
 
 export interface ArchiveResult {
   ok: boolean;
   totalMsgs: number;
+  skipped?: boolean;
 }
 
 export async function closeRoom(
@@ -36,6 +36,17 @@ export async function closeRoom(
 
   if (error) throw new Error(error.message);
   const messages = msgs ?? [];
+
+  // 🛡️ Guarda: não arquiva sala vazia (evita falsos fechamentos por flap de status)
+  if (messages.length === 0) {
+    console.warn(`[closeRoom] Sala "${roomId}" sem mensagens — arquivamento ignorado.`);
+    // Mesmo sem arquivar, notifica o canal para fechar o chat na tela
+    if (channel) {
+      await channel.send({ type: "broadcast", event: "close_room", payload: { roomId } });
+    }
+    return { ok: true, totalMsgs: 0, skipped: true };
+  }
+
   const encerrado_at = new Date().toISOString();
 
   // 2. Salva arquivo no Supabase
