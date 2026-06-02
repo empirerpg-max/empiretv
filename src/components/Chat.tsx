@@ -1,108 +1,99 @@
-import { useEffect, useRef, useState, useCallback } from "react";
+import { useEffect, useRef, useState } from "react";
+import { createClient, RealtimeChannel } from "@supabase/supabase-js";
+
+const SUPABASE_URL  = "https://rcfzzhucvsqeqdlfoxmq.supabase.co";
+const SUPABASE_ANON = "eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJpc3MiOiJzdXBhYmFzZSIsInJlZiI6InJjZnp6aHVjdnNxZXFkbGZveG1xIiwicm9sZSI6ImFub24iLCJpYXQiOjE3ODAzMzg2MTQsImV4cCI6MjA5NTkxNDYxNH0.U9SL1CDN2jNpv2H0BSwP-lw2hA045cKtrPbccFWV1BQ";
+const supabase = createClient(SUPABASE_URL, SUPABASE_ANON);
 
 interface Msg {
-  id: string;
-  tgId: string;
+  id: number;
+  created_at: string;
+  room_id: string;
+  user_id: string;
   nome: string;
   texto: string;
-  tipo: string;
-  gifUrl?: string;
-  data: string;
+  gif_url?: string;
 }
 
 // ── Armazenamento resiliente ──
-const memStore: Record<string, string> = {};
-function storeGet(key: string): string | null {
-  try { return localStorage.getItem(key); } catch { return memStore[key] ?? null; }
-}
-function storeSet(key: string, val: string) {
-  try { localStorage.setItem(key, val); } catch { memStore[key] = val; }
-}
+const mem: Record<string, string> = {};
+function sGet(k: string) { try { return localStorage.getItem(k); } catch { return mem[k] ?? null; } }
+function sSet(k: string, v: string) { try { localStorage.setItem(k, v); } catch { mem[k] = v; } }
 function genUid() {
-  let id = storeGet("etv_uid");
-  if (!id) { id = "u_" + Date.now().toString(36); storeSet("etv_uid", id); }
+  let id = sGet("etv_uid");
+  if (!id) { id = "u_" + Date.now().toString(36); sSet("etv_uid", id); }
   return id;
 }
-function getNome() { return storeGet("etv_nome") || "Espectador"; }
+const uid = genUid();
 
-// ── Acorda o servidor Render antes de conectar o WS ──
-async function wakeBackend(url: string) {
-  try { await fetch(`${url}/ping`, { signal: AbortSignal.timeout(8000) }); } catch { /* ignora */ }
-}
-
-export default function Chat({ roomId, backendUrl }: { roomId: string; backendUrl: string }) {
+export default function Chat({ roomId }: { roomId: string; backendUrl?: string }) {
   const [msgs,     setMsgs]     = useState<Msg[]>([]);
   const [texto,    setTexto]    = useState("");
-  const [nome,     setNome]     = useState(getNome());
-  const [editNome, setEditNome] = useState(!storeGet("etv_nome"));
+  const [nome,     setNome]     = useState(sGet("etv_nome") || "Espectador");
+  const [editNome, setEditNome] = useState(!sGet("etv_nome"));
   const [online,   setOnline]   = useState(0);
-  const [archived, setArchived] = useState(false);
-  const [status,   setStatus]   = useState<"waking"|"connecting"|"open"|"closed">("waking");
-  const wsRef       = useRef<WebSocket | null>(null);
-  const retryRef    = useRef<ReturnType<typeof setTimeout> | null>(null);
-  const bottomRef   = useRef<HTMLDivElement>(null);
-  const uid = genUid();
+  const [status,   setStatus]   = useState<"connecting"|"open"|"closed">("connecting");
+  const channelRef = useRef<RealtimeChannel | null>(null);
+  const bottomRef  = useRef<HTMLDivElement>(null);
 
-  const connect = useCallback(() => {
-    if (retryRef.current) clearTimeout(retryRef.current);
-    const wsUrl = backendUrl.replace("https://", "wss://").replace("http://", "ws://");
-    const ws = new WebSocket(
-      `${wsUrl}/ws?roomId=${encodeURIComponent(roomId)}&userId=${encodeURIComponent(uid)}&nome=${encodeURIComponent(nome)}`
-    );
-    wsRef.current = ws;
-    setStatus("connecting");
-
-    ws.onopen  = () => setStatus("open");
-    ws.onclose = () => {
-      setStatus("closed");
-      // Tenta acordar novamente antes de reconectar
-      retryRef.current = setTimeout(async () => {
-        await wakeBackend(backendUrl);
-        connect();
-      }, 5000);
-    };
-    ws.onerror = () => ws.close();
-    ws.onmessage = (e) => {
-      const msg = JSON.parse(e.data);
-      if (msg.type === "history")     { setMsgs(msg.messages || []); if (msg.archived) setArchived(true); }
-      if (msg.type === "message")     setMsgs(p => [...p.slice(-499), msg.message]);
-      if (msg.type === "online")      setOnline(msg.count);
-      if (msg.type === "room_closed") setArchived(true);
-      if (msg.type === "ping")        ws.send(JSON.stringify({ type: "pong" }));
-    };
-  }, [roomId, backendUrl, uid, nome]);
-
-  // ── Na montagem: acorda o servidor primeiro, depois conecta ──
+  // ── Carrega histórico + assina Realtime ──
   useEffect(() => {
     let cancelled = false;
-    setStatus("waking");
-    wakeBackend(backendUrl).then(() => {
-      if (!cancelled) connect();
-    });
-    // Keep-alive a cada 10 min para não deixar dormir enquanto o chat estiver aberto
-    const keepAlive = setInterval(() => fetch(`${backendUrl}/ping`).catch(() => {}), 10 * 60 * 1000);
+
+    // Busca últimas 100 mensagens da sala
+    supabase
+      .from("chat_messages")
+      .select("*")
+      .eq("room_id", roomId)
+      .order("created_at", { ascending: true })
+      .limit(100)
+      .then(({ data }) => {
+        if (!cancelled && data) setMsgs(data as Msg[]);
+      });
+
+    // Canal Realtime para novas mensagens
+    const channel = supabase
+      .channel(`chat:${roomId}`)
+      .on(
+        "postgres_changes",
+        { event: "INSERT", schema: "public", table: "chat_messages", filter: `room_id=eq.${roomId}` },
+        (payload) => {
+          if (!cancelled) setMsgs(p => [...p.slice(-499), payload.new as Msg]);
+        }
+      )
+      // Presence para contar online
+      .on("presence", { event: "sync" }, () => {
+        const state = channel.presenceState();
+        setOnline(Object.keys(state).length);
+      })
+      .subscribe((s) => {
+        if (cancelled) return;
+        setStatus(s === "SUBSCRIBED" ? "open" : s === "CLOSED" ? "closed" : "connecting");
+      });
+
+    channel.track({ uid, nome });
+    channelRef.current = channel;
+
     return () => {
       cancelled = true;
-      clearInterval(keepAlive);
-      if (retryRef.current) clearTimeout(retryRef.current);
-      wsRef.current?.close();
+      supabase.removeChannel(channel);
     };
-  // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [roomId, backendUrl]);
+  }, [roomId, nome]);
 
   useEffect(() => { bottomRef.current?.scrollIntoView({ behavior: "smooth" }); }, [msgs]);
 
   const salvarNome = () => {
     const n = nome.trim() || "Espectador";
-    storeSet("etv_nome", n);
-    setNome(n); setEditNome(false);
+    sSet("etv_nome", n); setNome(n); setEditNome(false);
   };
 
-  const enviar = () => {
+  const enviar = async () => {
     const t = texto.trim();
-    if (!t || archived || status !== "open") return;
-    wsRef.current?.send(JSON.stringify({ type: "message", texto: t }));
+    if (!t || status !== "open") return;
     setTexto("");
+    await supabase.from("chat_messages").insert({
+      room_id: roomId, user_id: uid, nome, texto: t,
+    });
   };
 
   const fmtHora = (iso: string) => {
@@ -111,10 +102,9 @@ export default function Chat({ roomId, backendUrl }: { roomId: string; backendUr
   };
 
   const statusLabel =
-    status === "waking"     ? "⏳ acordando..." :
-    status === "connecting" ? "⏳ conectando" :
     status === "open"       ? "● ao vivo" :
-                              "○ reconectando...";
+    status === "connecting" ? "⏳ conectando" :
+                              "○ offline";
 
   if (editNome) return (
     <div className="chat-nome-screen">
@@ -143,41 +133,37 @@ export default function Chat({ roomId, backendUrl }: { roomId: string; backendUr
         </div>
       </div>
 
-      {archived && <div className="chat-archived">🔒 Transmissão encerrada — modo arquivo</div>}
-
       <div className="chat-messages">
         {msgs.length === 0 && status !== "open" && (
-          <p className="chat-empty">⏳ Aguardando conexão com o servidor...</p>
+          <p className="chat-empty">⏳ Conectando ao chat...</p>
         )}
         {msgs.length === 0 && status === "open" && (
-          <p className="chat-empty">Seja o primeiro a enviar uma mensagem!</p>
+          <p className="chat-empty">Seja o primeiro a comentar!</p>
         )}
         {msgs.map(m => (
-          <div key={m.id} className={`chat-msg ${m.tgId === uid ? "own" : ""}`}>
+          <div key={m.id} className={`chat-msg ${m.user_id === uid ? "own" : ""}`}>
             <span className="chat-msg-nome">{m.nome}</span>
-            {m.gifUrl
-              ? <img src={m.gifUrl} alt="gif" className="chat-gif" />
+            {m.gif_url
+              ? <img src={m.gif_url} alt="gif" className="chat-gif" />
               : <span className="chat-msg-texto">{m.texto}</span>}
-            <span className="chat-msg-hora">{fmtHora(m.data)}</span>
+            <span className="chat-msg-hora">{fmtHora(m.created_at)}</span>
           </div>
         ))}
         <div ref={bottomRef} />
       </div>
 
-      {!archived && (
-        <div className="chat-input-row">
-          <input
-            className="chat-input"
-            value={texto}
-            onChange={e => setTexto(e.target.value)}
-            onKeyDown={e => e.key === "Enter" && enviar()}
-            placeholder={status === "open" ? "Mensagem..." : "Aguardando conexão..."}
-            maxLength={500}
-            disabled={status !== "open"}
-          />
-          <button className="chat-send" onClick={enviar} disabled={status !== "open" || !texto.trim()}>➤</button>
-        </div>
-      )}
+      <div className="chat-input-row">
+        <input
+          className="chat-input"
+          value={texto}
+          onChange={e => setTexto(e.target.value)}
+          onKeyDown={e => e.key === "Enter" && enviar()}
+          placeholder={status === "open" ? "Mensagem..." : "Aguardando conexão..."}
+          maxLength={500}
+          disabled={status !== "open"}
+        />
+        <button className="chat-send" onClick={enviar} disabled={status !== "open" || !texto.trim()}>➤</button>
+      </div>
     </div>
   );
 }
