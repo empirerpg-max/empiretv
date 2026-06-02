@@ -41,6 +41,8 @@ export default function AoVivo() {
   const currentUrlRef  = useRef("");
   const errorCountRef  = useRef(0);
   const closedRooms    = useRef<Set<string>>(new Set());
+  // Guarda o roomId da última transmissão ativa para detectar quando ela encerra
+  const lastActiveRoom = useRef<{ roomId: string; programa: string } | null>(null);
 
   const [current,    setCurrent]    = useState<Transmission | null>(null);
   const [loading,    setLoading]    = useState(true);
@@ -88,19 +90,27 @@ export default function AoVivo() {
     try {
       const data = await fetchGAS();
       const c: Transmission = data?.current || { status: "off", programa: "Empire TV" };
-      setCurrent(c);
 
-      // ── Auto-encerrar sala quando status === "finalizado" ──
-      if (c.status === "finalizado") {
-        const rid = c.topicoId || fallbackRoomId(c);
-        if (rid && !closedRooms.current.has(rid)) {
+      // ── Detecta fim de transmissão: estava broadcasting/kick/video → agora off ──
+      const isNowInactive = c.status === "off" || c.status === "finalizado";
+      if (isNowInactive && lastActiveRoom.current) {
+        const { roomId: rid, programa: prog } = lastActiveRoom.current;
+        if (!closedRooms.current.has(rid)) {
           closedRooms.current.add(rid);
-          // Fecha em background sem bloquear a UI
-          closeRoom(rid, c.programa).catch(err =>
+          lastActiveRoom.current = null;
+          closeRoom(rid, prog).catch(err =>
             console.error("[closeRoom]", err)
           );
         }
       }
+
+      // ── Registra sala ativa atual ──
+      if (c.status === "broadcasting") {
+        const rid = c.topicoId || fallbackRoomId(c);
+        lastActiveRoom.current = { roomId: rid, programa: c.programa };
+      }
+
+      setCurrent(c);
 
       if (c.status === "upcoming" && c.secondsToStart)
         setCountdown(c.secondsToStart);
