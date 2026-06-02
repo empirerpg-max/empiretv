@@ -4,6 +4,15 @@ on:
   schedule:
     - cron: '*/5 * * * *'
   workflow_dispatch:
+    inputs:
+      modo_teste:
+        description: 'Rodar em modo teste? (ignora data/hora da planilha)'
+        required: false
+        default: 'nao'
+        type: choice
+        options:
+          - nao
+          - sim
 
 concurrency:
   group: transmissao-empire-tv
@@ -39,4 +48,8 @@ jobs:
           RTMP_URL: ${{ secrets.RTMP_URL }}
           RTMP_KEY: ${{ secrets.RTMP_KEY }}
         run: |
-          python transmissao.py
+          if [ "${{ github.event.inputs.modo_teste }}" = "sim" ]; then
+            python transmissao.py --teste
+          else
+            python transmissao.py
+          fi
