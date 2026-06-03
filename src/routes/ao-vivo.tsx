@@ -13,9 +13,10 @@ const LOGO         = "https://i.imgur.com/6cL3Ca9.png";
 const KICK_CHANNEL = "empiretvoficial";
 const KICK_PLAYER  = `https://player.kick.com/${KICK_CHANNEL}?muted=false`;
 
-// Quantos polls consecutivos "off" são necessários antes de fechar a sala
-// (60 s por poll × 3 = 3 minutos de confirmação)
-const POLLS_TO_CLOSE = 3;
+// 5 polls × 60s = 5 minutos de confirmação antes de fechar a sala
+// + 90s de delay de segurança após confirmar = ~6,5 min total
+const POLLS_TO_CLOSE  = 5;
+const CLOSE_DELAY_MS  = 90_000; // 90 segundos de grace period
 
 interface Transmission {
   status: string; programa: string; tipo?: string;
@@ -40,14 +41,14 @@ function fallbackRoomId(c: Transmission): string {
 }
 
 export default function AoVivo() {
-  const videoRef        = useRef<HTMLVideoElement>(null);
-  const canvasRef       = useRef<HTMLCanvasElement>(null);
-  const currentUrlRef   = useRef("");
-  const errorCountRef   = useRef(0);
-  const closedRooms     = useRef<Set<string>>(new Set());
-  const lastActiveRoom  = useRef<{ roomId: string; programa: string } | null>(null);
-  // Contador de polls consecutivos com status inativo — só fecha após POLLS_TO_CLOSE
+  const videoRef          = useRef<HTMLVideoElement>(null);
+  const canvasRef         = useRef<HTMLCanvasElement>(null);
+  const currentUrlRef     = useRef("");
+  const errorCountRef     = useRef(0);
+  const closedRooms       = useRef<Set<string>>(new Set());
+  const lastActiveRoom    = useRef<{ roomId: string; programa: string; duracaoMs: number } | null>(null);
   const inactivePollCount = useRef(0);
+  const closeTimerRef     = useRef<ReturnType<typeof setTimeout> | null>(null);
 
   const [current,     setCurrent]     = useState<Transmission | null>(null);
   const [loading,     setLoading]     = useState(true);
@@ -99,33 +100,55 @@ export default function AoVivo() {
       const isNowInactive = c.status === "off" || c.status === "finalizado";
 
       if (isNowInactive && lastActiveRoom.current) {
-        // Incrementa contador de confirmações consecutivas
         inactivePollCount.current += 1;
         console.log(`[AoVivo] Status inativo (${inactivePollCount.current}/${POLLS_TO_CLOSE})`);
 
-        if (inactivePollCount.current >= POLLS_TO_CLOSE) {
-          const { roomId: rid, programa: prog } = lastActiveRoom.current;
+        if (
+          inactivePollCount.current >= POLLS_TO_CLOSE &&
+          closeTimerRef.current === null
+        ) {
+          const { roomId: rid, programa: prog, duracaoMs } = lastActiveRoom.current;
+
           if (!closedRooms.current.has(rid)) {
-            closedRooms.current.add(rid);
-            lastActiveRoom.current = null;
-            inactivePollCount.current = 0;
-            console.log(`[AoVivo] Fechando sala "${rid}" após ${POLLS_TO_CLOSE} confirmações.`);
-            closeRoom(rid, prog).catch(err =>
-              console.error("[closeRoom]", err)
+            console.log(
+              `[AoVivo] Agendando closeRoom "${rid}" em ${CLOSE_DELAY_MS / 1000}s...`
             );
+
+            // Delay de segurança: garante que mensagens tardias sejam salvas antes de arquivar
+            closeTimerRef.current = setTimeout(async () => {
+              closeTimerRef.current = null;
+
+              // Verifica novamente se ainda está inativo antes de fechar
+              if (!closedRooms.current.has(rid)) {
+                closedRooms.current.add(rid);
+                lastActiveRoom.current = null;
+                inactivePollCount.current = 0;
+                console.log(`[AoVivo] Fechando sala "${rid}" após delay de segurança.`);
+                closeRoom(rid, prog, null, duracaoMs).catch(err =>
+                  console.error("[closeRoom]", err)
+                );
+              }
+            }, CLOSE_DELAY_MS);
           }
         }
       } else {
-        // Se voltou a ficar ativo, reseta o contador
+        // Voltou a ficar ativo — cancela qualquer timer pendente
+        if (closeTimerRef.current !== null) {
+          clearTimeout(closeTimerRef.current);
+          closeTimerRef.current = null;
+          console.log(`[AoVivo] Transmissão voltou — timer de fechamento cancelado.`);
+        }
         inactivePollCount.current = 0;
       }
 
-      // ── Registra sala ativa atual ──
       if (c.status === "broadcasting") {
         const rid = c.topicoId || fallbackRoomId(c);
-        // Só atualiza lastActiveRoom se mudou de sala (não reseta o polling de fechamento)
         if (!lastActiveRoom.current || lastActiveRoom.current.roomId !== rid) {
-          lastActiveRoom.current = { roomId: rid, programa: c.programa };
+          lastActiveRoom.current = {
+            roomId: rid,
+            programa: c.programa,
+            duracaoMs: (c.duracao ?? 0) * 60_000, // duracao vem em minutos da planilha
+          };
           inactivePollCount.current = 0;
         }
       }
@@ -156,8 +179,7 @@ export default function AoVivo() {
       }
     } catch (err) {
       console.error("[AoVivo] fetchAndSync:", err);
-      // Erro de rede NÃO conta como poll inativo — não incrementa o contador
-      setCurrent(prev => prev); // mantém estado anterior
+      setCurrent(prev => prev);
     } finally {
       setLoading(false);
       setIsSyncing(false);
@@ -166,8 +188,11 @@ export default function AoVivo() {
 
   useEffect(() => {
     fetchAndSync();
-    const t = setInterval(fetchAndSync, 60000);
-    return () => clearInterval(t);
+    const t = setInterval(fetchAndSync, 60_000);
+    return () => {
+      clearInterval(t);
+      if (closeTimerRef.current !== null) clearTimeout(closeTimerRef.current);
+    };
   }, [fetchAndSync]);
 
   // ── Countdown ──
