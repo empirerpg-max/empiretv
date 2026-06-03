@@ -1,19 +1,18 @@
 /**
  * chatArchive.ts
- * Chamado quando status muda para "finalizado" no GAS.
- * 1. Busca todas as mensagens do banco
- * 2. Salva em chat_archives (Supabase) — SOMENTE se houver ≥1 mensagem
- * 3. Envia resumo para o Google Sheets via GAS webhook
- * 4. Apaga mensagens da sala no banco (libera espaço)
- * 5. Notifica todos no canal broadcast que a sala fechou
+ * 1. Busca mensagens do banco
+ * 2. Salva em chat_archives (≥1 msg)
+ * 3. Envia histórico + presença p/ GAS webhook
+ * 4. Deleta mensagens da sala
+ * 5. Notifica broadcast close_room
  */
 import { createClient, RealtimeChannel } from "@supabase/supabase-js";
+import { endPresence } from "../components/Chat";
 
 const SUPABASE_URL  = "https://rcfzzhucvsqeqdlfoxmq.supabase.co";
 const SUPABASE_ANON = "eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJpc3MiOiJzdXBhYmFzZSIsInJlZiI6InJjZnp6aHVjdnNxZXFkbGZveG1xIiwicm9sZSI6ImFub24iLCJpYXQiOjE3ODAzMzg2MTQsImV4cCI6MjA5NTkxNDYxNH0.U9SL1CDN2jNpv2H0BSwP-lw2hA045cKtrPbccFWV1BQ";
 const sb = createClient(SUPABASE_URL, SUPABASE_ANON);
 
-// URL do GAS que recebe o histórico do chat e salva na planilha
 const GAS_WEBHOOK = import.meta.env.VITE_GAS_CHAT_WEBHOOK || "";
 
 export interface ArchiveResult {
@@ -26,8 +25,10 @@ export async function closeRoom(
   roomId: string,
   programa: string,
   channel?: RealtimeChannel | null,
+  // duração real da transmissão em ms (calculada pelo ao-vivo.tsx)
+  transmissaoDuracaoMs = 0,
 ): Promise<ArchiveResult> {
-  // 1. Busca todas as mensagens da sala
+  // 1. Busca mensagens
   const { data: msgs, error } = await sb
     .from("chat_messages")
     .select("*")
@@ -37,46 +38,43 @@ export async function closeRoom(
   if (error) throw new Error(error.message);
   const messages = msgs ?? [];
 
-  // 🛡️ Guarda: não arquiva sala vazia (evita falsos fechamentos por flap de status)
+  // 🛡️ Não arquiva sala vazia
   if (messages.length === 0) {
-    console.warn(`[closeRoom] Sala "${roomId}" sem mensagens — arquivamento ignorado.`);
-    // Mesmo sem arquivar, notifica o canal para fechar o chat na tela
-    if (channel) {
-      await channel.send({ type: "broadcast", event: "close_room", payload: { roomId } });
-    }
+    console.warn(`[closeRoom] "${roomId}" sem mensagens — arquivamento ignorado.`);
+    if (channel) await channel.send({ type: "broadcast", event: "close_room", payload: { roomId } });
+    // Encerra presença com 0 de duração conhecida
+    await endPresence(transmissaoDuracaoMs);
     return { ok: true, totalMsgs: 0, skipped: true };
   }
 
   const encerrado_at = new Date().toISOString();
 
-  // 2. Salva arquivo no Supabase
+  // 2. Salva archive
   await sb.from("chat_archives").upsert({
-    room_id: roomId,
-    programa,
-    encerrado_at,
-    messages_json: messages,
+    room_id: roomId, programa, encerrado_at, messages_json: messages,
   }, { onConflict: "room_id" });
 
-  // 3. Envia para Google Sheets (se webhook configurado)
+  // 3. Envia para GAS (histórico)
   if (GAS_WEBHOOK) {
     try {
       await fetch(GAS_WEBHOOK, {
         method: "POST",
         headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ roomId, programa, encerrado_at, messages }),
+        body: JSON.stringify({ tipo: "historico", roomId, programa, encerrado_at, messages }),
       });
     } catch (e) {
       console.warn("[closeRoom] GAS webhook falhou:", e);
     }
   }
 
-  // 4. Apaga mensagens da sala do banco (mantém só o archive)
+  // 4. Deleta mensagens
   await sb.from("chat_messages").delete().eq("room_id", roomId);
 
-  // 5. Notifica todos via broadcast que a sala fechou
-  if (channel) {
-    await channel.send({ type: "broadcast", event: "close_room", payload: { roomId } });
-  }
+  // 5. Broadcast
+  if (channel) await channel.send({ type: "broadcast", event: "close_room", payload: { roomId } });
+
+  // 6. Envia presença do usuário local
+  await endPresence(transmissaoDuracaoMs);
 
   return { ok: true, totalMsgs: messages.length };
 }
