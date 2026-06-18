@@ -61,21 +61,14 @@ def get_pending_videos(sheet):
             programa = str(r.get("Programa", "Empire TV")).strip()
             data_str = str(r.get("Data", "")).strip()
             horario  = str(r.get("Horario", "")).strip()
-
             raw_row = raw_data[idx + 1]
             label_programa = str(raw_row[5]).strip() if len(raw_row) > 5 else programa
             tipo   = str(raw_row[6]).strip() if len(raw_row) > 6 else ""
             titulo = str(raw_row[7]).strip() if len(raw_row) > 7 else ""
-
             videos.append({
-                "row": idx + 2,
-                "drive_id": drive_id,
-                "programa": programa,
-                "duracao": duracao,
-                "horario": f"{data_str} {horario}".strip(),
-                "label_programa": label_programa,
-                "tipo": tipo,
-                "titulo": titulo,
+                "row": idx + 2, "drive_id": drive_id, "programa": programa,
+                "duracao": duracao, "horario": f"{data_str} {horario}".strip(),
+                "label_programa": label_programa, "tipo": tipo, "titulo": titulo,
             })
         return videos
 
@@ -103,12 +96,10 @@ def get_pending_videos(sheet):
         if not sched:
             log(f"Linha {idx+2} ({programa}) com data/hora inválida: '{data_str} {horario}' — ignorando.")
             continue
-
         raw_row = raw_data[idx + 1]
         label_programa = str(raw_row[5]).strip() if len(raw_row) > 5 else programa
         tipo   = str(raw_row[6]).strip() if len(raw_row) > 6 else ""
         titulo = str(raw_row[7]).strip() if len(raw_row) > 7 else ""
-
         if now >= sched:
             candidatos.append({
                 "row": idx + 2, "drive_id": drive_id, "programa": programa,
@@ -125,7 +116,6 @@ def get_pending_videos(sheet):
     sched_mais_cedo = min(c["sched"] for c in candidatos)
     programa_ativo  = next(c["programa"] for c in candidatos if c["sched"] == sched_mais_cedo)
     log(f"Grupo ativo: '{programa_ativo}' — início {sched_mais_cedo.strftime('%d/%m/%Y %H:%M')}")
-
     grupo = [
         {
             "row": c["row"], "drive_id": c["drive_id"], "programa": c["programa"],
@@ -168,15 +158,34 @@ def extract_drive_id(val):
         return val
     return ""
 
-# ── VINHETA ANIMADA ────────────────────────────────────────────────────────
+# ── VINHETA ANIMADA ─────────────────────────────────────────────────────
+
+def _wrap_text(text, font, draw, max_width):
+    """Quebra o texto em linhas que caibam dentro de max_width pixels."""
+    words = text.split()
+    lines = []
+    current = ""
+    for word in words:
+        test = f"{current} {word}".strip()
+        w = draw.textbbox((0, 0), test, font=font)[2]
+        if w <= max_width:
+            current = test
+        else:
+            if current:
+                lines.append(current)
+            current = word
+    if current:
+        lines.append(current)
+    return lines
 
 def generate_title_card(titulo, label_programa, output_path):
     """
     Gera vídeo de vinheta com efeito de digitação usando Pillow + FFmpeg.
-    - Duração: 4s (título até 30 chars) ou 5s (título > 30 chars)
+    - Duração: sempre 10 segundos
     - Texto roxo (#a470ef), fundo preto
+    - Quebra de linha automática: nunca passa da borda da tela
+    - Fonte reduzida automaticamente se necessário
     - Label do programa (coluna F) acima do título em cinza
-    - Cursor piscante e linha expansiva
     """
     try:
         from PIL import Image, ImageDraw, ImageFont
@@ -186,37 +195,55 @@ def generate_title_card(titulo, label_programa, output_path):
 
     W, H = 1920, 1080
     FPS = 30
-    duracao = 4 if len(titulo) <= 30 else 5
-    total_frames = duracao * FPS
-    typing_frames = int(total_frames * 0.65)
-    chars = len(titulo)
+    DURACAO = 10
+    total_frames = DURACAO * FPS
+    typing_frames = int(total_frames * 0.5)  # digita na primeira metade
+    MAX_TXT_W = 1720  # margem de 100px de cada lado
 
     font_paths = [
         "/usr/share/fonts/truetype/dejavu/DejaVuSans-Bold.ttf",
         "/usr/share/fonts/truetype/liberation/LiberationSans-Bold.ttf",
         "/usr/share/fonts/truetype/freefont/FreeSansBold.ttf",
     ]
-    font = font_small = None
+    font_path = None
     for fp in font_paths:
         if os.path.exists(fp):
-            font       = ImageFont.truetype(fp, 88)
-            font_small = ImageFont.truetype(fp, 34)
+            font_path = fp
             break
-    if font is None:
-        font = font_small = ImageFont.load_default()
+
+    # Ajusta tamanho da fonte até caber (começa em 88, reduz até 48)
+    font_size = 88
+    font = font_small = None
+    tmp_img  = Image.new("RGB", (W, H), (0, 0, 0))
+    tmp_draw = ImageDraw.Draw(tmp_img)
+    while font_size >= 48:
+        if font_path:
+            font = ImageFont.truetype(font_path, font_size)
+        else:
+            font = ImageFont.load_default()
+        # verifica se a linha mais longa cabe
+        lines = _wrap_text(titulo, font, tmp_draw, MAX_TXT_W)
+        widths = [tmp_draw.textbbox((0, 0), l, font=font)[2] for l in lines]
+        if max(widths) <= MAX_TXT_W:
+            break
+        font_size -= 4
+
+    if font_path:
+        font_small = ImageFont.truetype(font_path, max(24, font_size // 3))
+    else:
+        font_small = font
 
     purple = (164, 112, 239)
     white  = (255, 255, 255)
     black  = (0, 0, 0)
     gray   = (110, 110, 110)
 
-    tmp = Image.new("RGB", (W, H), black)
-    td  = ImageDraw.Draw(tmp)
-    fb  = td.textbbox((0, 0), titulo, font=font)
-    text_w = fb[2] - fb[0]
-    text_h = fb[3] - fb[1]
-    x0 = (W - text_w) // 2
-    y0 = (H - text_h) // 2 - 20
+    # Calcula layout final com as linhas quebradas
+    lines = _wrap_text(titulo, font, tmp_draw, MAX_TXT_W)
+    line_h = tmp_draw.textbbox((0, 0), "Ag", font=font)[3] + 12  # altura de linha + espaçamento
+    block_h = line_h * len(lines)
+    y0_block = (H - block_h) // 2 - 20  # centro vertical do bloco de texto
+    chars_total = len(titulo)
 
     frames_dir = f"/tmp/tc_frames_{os.getpid()}"
     os.makedirs(frames_dir, exist_ok=True)
@@ -226,47 +253,67 @@ def generate_title_card(titulo, label_programa, output_path):
         img  = Image.new("RGB", (W, H), black)
         draw = ImageDraw.Draw(img)
 
-        n_chars = chars if fi >= typing_frames else max(1, int((fi / typing_frames) * chars))
-        current = titulo[:n_chars]
-        show_cursor = (fi // 15) % 2 == 0
+        # quantos chars já foram "digitados"
+        n_chars = chars_total if fi >= typing_frames else max(1, int((fi / typing_frames) * chars_total))
+        current_text = titulo[:n_chars]
+        show_cursor  = (fi // 15) % 2 == 0
 
-        draw.text((x0 + 3, y0 + 3), current, font=font, fill=(30, 0, 55))
-        draw.text((x0, y0), current, font=font, fill=purple)
+        # Renderiza linha por linha
+        cur_lines = _wrap_text(current_text, font, draw, MAX_TXT_W)
+        for li, line in enumerate(cur_lines):
+            lb = draw.textbbox((0, 0), line, font=font)
+            lw = lb[2] - lb[0]
+            lx = (W - lw) // 2
+            ly = y0_block + li * line_h
+            # sombra
+            draw.text((lx + 3, ly + 3), line, font=font, fill=(30, 0, 55))
+            # texto roxo
+            draw.text((lx, ly), line, font=font, fill=purple)
 
-        if n_chars < chars or fi < typing_frames + FPS:
-            cb = draw.textbbox((0, 0), current, font=font)
-            cx = x0 + (cb[2] - cb[0]) + 6
+        # Cursor piscante após o último char
+        if n_chars < chars_total or fi < typing_frames + FPS:
+            last_line = cur_lines[-1] if cur_lines else ""
+            cb = draw.textbbox((0, 0), last_line, font=font)
+            last_lx = (W - (draw.textbbox((0, 0), cur_lines[-1] if cur_lines else "", font=font)[2])) // 2 if cur_lines else W // 2
+            cx = last_lx + (cb[2] - cb[0]) + 6
+            last_ly = y0_block + (len(cur_lines) - 1) * line_h
             if show_cursor:
-                draw.text((cx, y0), "_", font=font, fill=white)
+                draw.text((cx, last_ly), "_", font=font, fill=white)
 
+        # Linha decorativa roxa abaixo do bloco (expande conforme digita)
         lp = min(1.0, fi / max(1, typing_frames * 0.75))
-        lw = int(text_w * lp)
-        ly = y0 + text_h + 16
-        if lw > 0:
-            draw.rectangle([x0, ly, x0 + lw, ly + 3], fill=purple)
+        max_lw = min(MAX_TXT_W, max(
+            draw.textbbox((0, 0), l, font=font)[2] for l in lines
+        ))
+        bar_w = int(max_lw * lp)
+        bar_y = y0_block + block_h + 16
+        bar_x = (W - max_lw) // 2
+        if bar_w > 0:
+            draw.rectangle([bar_x, bar_y, bar_x + bar_w, bar_y + 3], fill=purple)
 
+        # Label do programa (coluna F) — fade-in rápido no topo
         if label_programa:
-            alpha = min(200, fi * 15)
+            alpha = min(200, fi * 10)
             lc = tuple(int(c * alpha / 200) for c in gray)
-            lb = draw.textbbox((0, 0), label_programa, font=font_small)
-            lx = (W - (lb[2] - lb[0])) // 2
-            draw.text((lx, y0 - 68), label_programa, font=font_small, fill=lc)
+            lb2 = draw.textbbox((0, 0), label_programa, font=font_small)
+            lx2 = (W - (lb2[2] - lb2[0])) // 2
+            draw.text((lx2, y0_block - 60), label_programa, font=font_small, fill=lc)
 
         img.save(f"{frames_dir}/f{fi:05d}.png")
 
+    # Preenche frames pulados
     for fi in range(total_frames):
         target = f"{frames_dir}/f{fi:05d}.png"
         if not os.path.exists(target):
             prev = (fi // step) * step
-            src  = f"{frames_dir}/f{prev:05d}.png"
-            shutil.copy(src, target)
+            shutil.copy(f"{frames_dir}/f{prev:05d}.png", target)
 
     cmd = [
         "ffmpeg", "-y",
         "-framerate", str(FPS),
         "-i", f"{frames_dir}/f%05d.png",
         "-f", "lavfi", "-i", "anullsrc=r=44100:cl=stereo",
-        "-t", str(duracao),
+        "-t", str(DURACAO),
         "-c:v", "libx264", "-preset", "ultrafast", "-crf", "18",
         "-vf", "scale=1920:1080",
         "-c:a", "aac", "-b:a", "160k", "-ar", "44100",
@@ -276,31 +323,30 @@ def generate_title_card(titulo, label_programa, output_path):
         "-avoid_negative_ts", "make_zero",
         "-shortest", output_path
     ]
-    result = subprocess.run(cmd, capture_output=True, text=True, timeout=120)
+    result = subprocess.run(cmd, capture_output=True, text=True, timeout=180)
     shutil.rmtree(frames_dir, ignore_errors=True)
 
     if result.returncode == 0 and os.path.exists(output_path):
-        log(f"  ✓ Vinheta gerada: '{titulo}' ({duracao}s)")
+        log(f"  ✓ Vinheta gerada: '{titulo}' (10s, {len(lines)} linha(s), fonte {font_size}px)")
         return True
     log(f"  FALHA ao gerar vinheta: {result.stderr[-200:]}")
     return False
 
 def _generate_title_card_fallback(titulo, label_programa, output_path):
     """Fallback sem Pillow: texto estático via FFmpeg drawtext."""
-    duracao = 4 if len(titulo) <= 30 else 5
     titulo_safe = titulo.replace("'", "\\'").replace(":", "\\:")
     label_safe  = label_programa.replace("'", "\\'").replace(":", "\\:")
     vf = (
         f"drawtext=text='{label_safe}':fontfile=/usr/share/fonts/truetype/dejavu/DejaVuSans-Bold.ttf"
-        f":fontsize=34:fontcolor=0x6e6e6e:x=(w-text_w)/2:y=(h/2)-120,"
+        f":fontsize=30:fontcolor=0x6e6e6e:x=(w-text_w)/2:y=(h/2)-120,"
         f"drawtext=text='{titulo_safe}':fontfile=/usr/share/fonts/truetype/dejavu/DejaVuSans-Bold.ttf"
-        f":fontsize=88:fontcolor=0xa470ef:x=(w-text_w)/2:y=(h-text_h)/2-20"
+        f":fontsize=72:fontcolor=0xa470ef:x=(w-text_w)/2:y=(h-text_h)/2-20"
     )
     cmd = [
         "ffmpeg", "-y",
-        "-f", "lavfi", "-i", f"color=c=black:size=1920x1080:rate=30:duration={duracao}",
+        "-f", "lavfi", "-i", "color=c=black:size=1920x1080:rate=30:duration=10",
         "-f", "lavfi", "-i", "anullsrc=r=44100:cl=stereo",
-        "-t", str(duracao), "-vf", vf,
+        "-t", "10", "-vf", vf,
         "-c:v", "libx264", "-preset", "ultrafast", "-crf", "18",
         "-c:a", "aac", "-b:a", "160k", "-ar", "44100",
         "-r", "30", "-g", "60", "-keyint_min", "60", "-sc_threshold", "0",
@@ -309,7 +355,7 @@ def _generate_title_card_fallback(titulo, label_programa, output_path):
     ]
     result = subprocess.run(cmd, capture_output=True, text=True, timeout=60)
     if result.returncode == 0 and os.path.exists(output_path):
-        log(f"  ✓ Vinheta estática (fallback): '{titulo}' ({duracao}s)")
+        log(f"  ✓ Vinheta estática (fallback): '{titulo}' (10s)")
         return True
     log(f"  FALHA no fallback: {result.stderr[-200:]}")
     return False
@@ -323,7 +369,6 @@ def download_video(drive_id, output_path):
         return True
     if os.path.exists(output_path):
         os.remove(output_path)
-
     url = f"https://drive.google.com/file/d/{drive_id}/view"
     try:
         result = subprocess.run(
@@ -336,7 +381,6 @@ def download_video(drive_id, output_path):
         log(f"  yt-dlp falhou ({result.returncode}): {result.stderr[-150:]}")
     except Exception as e:
         log(f"  yt-dlp erro: {e}")
-
     try:
         session = requests.Session()
         session.headers.update({"User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 Chrome/124.0.0.0 Safari/537.36"})
@@ -366,24 +410,17 @@ def download_video(drive_id, output_path):
         log(f"  requests erro: {e}")
         if os.path.exists(output_path):
             os.remove(output_path)
-
     return False
 
 def normalize_video(input_path, output_path):
     cmd = [
-        "ffmpeg", "-y",
-        "-i", input_path,
+        "ffmpeg", "-y", "-i", input_path,
         "-c:v", "libx264", "-preset", "ultrafast", "-crf", "18",
         "-c:a", "aac", "-b:a", "160k", "-ar", "44100",
         "-vf", "scale=1920:1080:force_original_aspect_ratio=decrease,pad=1920:1080:(ow-iw)/2:(oh-ih)/2:black",
-        "-r", "30",
-        "-g", "60",
-        "-keyint_min", "60",
-        "-sc_threshold", "0",
-        "-video_track_timescale", "90000",
-        "-avoid_negative_ts", "make_zero",
-        "-fflags", "+genpts",
-        output_path
+        "-r", "30", "-g", "60", "-keyint_min", "60", "-sc_threshold", "0",
+        "-video_track_timescale", "90000", "-avoid_negative_ts", "make_zero",
+        "-fflags", "+genpts", output_path
     ]
     result = subprocess.run(cmd, capture_output=True, text=True, timeout=600)
     if result.returncode == 0 and os.path.exists(output_path) and os.path.getsize(output_path) > 1024:
@@ -409,10 +446,7 @@ def validate_video(path):
 def build_rtmp_dest(rtmp_url, rtmp_key):
     base = rtmp_url.rstrip("/")
     key  = rtmp_key.strip()
-    if key and base.endswith(key):
-        dest = base
-    else:
-        dest = f"{base}/{key}"
+    dest = base if (key and base.endswith(key)) else f"{base}/{key}"
     try:
         from urllib.parse import urlparse
         p = urlparse(dest)
@@ -423,7 +457,7 @@ def build_rtmp_dest(rtmp_url, rtmp_key):
         log(f"[RTMP] Caminho   : {safe_path}")
         log(f"[RTMP] URL final : {p.scheme}://{p.netloc}{safe_path}")
     except Exception:
-        log(f"[RTMP] Destino montado (log detalhado falhou)")
+        log("[RTMP] Destino montado (log detalhado falhou)")
     return dest
 
 def transmit_playlist(video_paths, rtmp_url, rtmp_key):
@@ -431,31 +465,17 @@ def transmit_playlist(video_paths, rtmp_url, rtmp_key):
     with open(list_path, "w") as f:
         for p in video_paths:
             f.write(f"file '{p}'\n")
-
     dest = build_rtmp_dest(rtmp_url, rtmp_key)
-
     log(f"Iniciando FFmpeg — {len(video_paths)} vídeo(s) em sequência contínua...")
     log(f"[CONFIG] 30fps | 6500k vbr | 13000k buf | aac 160k")
-
     cmd = [
         "ffmpeg", "-re",
-        "-f", "concat", "-safe", "0",
-        "-i", list_path,
-        "-c:v", "libx264",
-        "-preset", "veryfast",
-        "-tune", "zerolatency",
-        "-b:v", "6500k",
-        "-maxrate", "6500k",
-        "-bufsize", "13000k",
-        "-r", "30",
-        "-g", "60",
-        "-keyint_min", "60",
-        "-sc_threshold", "0",
-        "-c:a", "aac",
-        "-b:a", "160k",
-        "-ar", "44100",
-        "-f", "flv",
-        dest
+        "-f", "concat", "-safe", "0", "-i", list_path,
+        "-c:v", "libx264", "-preset", "veryfast", "-tune", "zerolatency",
+        "-b:v", "6500k", "-maxrate", "6500k", "-bufsize", "13000k",
+        "-r", "30", "-g", "60", "-keyint_min", "60", "-sc_threshold", "0",
+        "-c:a", "aac", "-b:a", "160k", "-ar", "44100",
+        "-f", "flv", dest
     ]
     process = subprocess.Popen(cmd, stdout=subprocess.PIPE, stderr=subprocess.STDOUT, text=True)
     for line in process.stdout:
@@ -530,13 +550,11 @@ def main():
         raw_path  = f"/tmp/raw_{v['drive_id']}.mp4"
         norm_path = f"/tmp/norm_{i:03d}_{v['drive_id']}.mp4"
 
-        # ── VINHETA DE TÍTULO ─────────────────────────────────────────────
         if v.get("tipo", "").strip() == "Título" and v.get("titulo", "").strip():
             card_path = f"/tmp/card_{i:03d}.mp4"
             log(f"[{i+1}] Gerando vinheta: '{v['titulo']}' [{v.get('label_programa', '')}]")
             if generate_title_card(v["titulo"], v.get("label_programa", ""), card_path):
                 video_paths.append((card_path, None))
-        # ──────────────────────────────────────────────────────────────────
 
         log(f"[{i+1}/{len(videos)}] Baixando: {v['programa']} ({v['drive_id']})")
         if not download_video(v["drive_id"], raw_path):
