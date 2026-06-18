@@ -2,6 +2,7 @@ import os
 import sys
 import json
 import subprocess
+import shutil
 from datetime import datetime
 import pytz
 import gspread
@@ -41,7 +42,6 @@ def get_pending_videos(sheet):
     records = [dict(zip(headers, row)) for row in raw_data[1:]]
     now = datetime.now(TZ_SP)
 
-    # ── MODO TESTE: pega todas as linhas pendentes sem validar horário ──
     if MODO_TESTE:
         log("*** MODO TESTE ATIVO — ignorando validação de data/hora ***")
         videos = []
@@ -61,12 +61,24 @@ def get_pending_videos(sheet):
             programa = str(r.get("Programa", "Empire TV")).strip()
             data_str = str(r.get("Data", "")).strip()
             horario  = str(r.get("Horario", "")).strip()
-            videos.append({"row": idx+2, "drive_id": drive_id, "programa": programa,
-                           "duracao": duracao, "horario": f"{data_str} {horario}".strip()})
+
+            raw_row = raw_data[idx + 1]
+            label_programa = str(raw_row[5]).strip() if len(raw_row) > 5 else programa
+            tipo   = str(raw_row[6]).strip() if len(raw_row) > 6 else ""
+            titulo = str(raw_row[7]).strip() if len(raw_row) > 7 else ""
+
+            videos.append({
+                "row": idx + 2,
+                "drive_id": drive_id,
+                "programa": programa,
+                "duracao": duracao,
+                "horario": f"{data_str} {horario}".strip(),
+                "label_programa": label_programa,
+                "tipo": tipo,
+                "titulo": titulo,
+            })
         return videos
 
-    # ── MODO AUTOMÁTICO: agrupa por Programa + Data + Horário de início ──
-    # Passo 1: coleta todos os candidatos com horário já atingido
     candidatos = []
     for idx, r in enumerate(records):
         status = str(r.get("Status", "")).strip().lower()
@@ -91,31 +103,38 @@ def get_pending_videos(sheet):
         if not sched:
             log(f"Linha {idx+2} ({programa}) com data/hora inválida: '{data_str} {horario}' — ignorando.")
             continue
+
+        raw_row = raw_data[idx + 1]
+        label_programa = str(raw_row[5]).strip() if len(raw_row) > 5 else programa
+        tipo   = str(raw_row[6]).strip() if len(raw_row) > 6 else ""
+        titulo = str(raw_row[7]).strip() if len(raw_row) > 7 else ""
+
         if now >= sched:
-            candidatos.append({"row": idx+2, "drive_id": drive_id, "programa": programa,
-                               "duracao": duracao, "data_str": data_str, "horario": horario,
-                               "sched": sched})
+            candidatos.append({
+                "row": idx + 2, "drive_id": drive_id, "programa": programa,
+                "duracao": duracao, "data_str": data_str, "horario": horario,
+                "sched": sched, "label_programa": label_programa,
+                "tipo": tipo, "titulo": titulo,
+            })
         else:
             log(f"Linha {idx+2} ({programa}) agendada para {data_str} {horario} — ainda não chegou.")
 
     if not candidatos:
         return []
 
-    # Passo 2: identifica o grupo ativo = menor sched entre os candidatos
     sched_mais_cedo = min(c["sched"] for c in candidatos)
     programa_ativo  = next(c["programa"] for c in candidatos if c["sched"] == sched_mais_cedo)
-
     log(f"Grupo ativo: '{programa_ativo}' — início {sched_mais_cedo.strftime('%d/%m/%Y %H:%M')}")
 
-    # Passo 3: retorna apenas as linhas desse grupo (mesmo Programa + mesma Data + mesmo Horário)
     grupo = [
-        {"row": c["row"], "drive_id": c["drive_id"], "programa": c["programa"],
-         "duracao": c["duracao"], "horario": f"{c['data_str']} {c['horario']}".strip()}
+        {
+            "row": c["row"], "drive_id": c["drive_id"], "programa": c["programa"],
+            "duracao": c["duracao"], "horario": f"{c['data_str']} {c['horario']}".strip(),
+            "label_programa": c["label_programa"], "tipo": c["tipo"], "titulo": c["titulo"],
+        }
         for c in candidatos
         if c["programa"] == programa_ativo and c["sched"] == sched_mais_cedo
     ]
-
-    # Mantém a ordem original da planilha (row number)
     grupo.sort(key=lambda x: x["row"])
     return grupo
 
@@ -148,6 +167,154 @@ def extract_drive_id(val):
     if re.match(r"^[a-zA-Z0-9_-]{10,}$", val):
         return val
     return ""
+
+# ── VINHETA ANIMADA ────────────────────────────────────────────────────────
+
+def generate_title_card(titulo, label_programa, output_path):
+    """
+    Gera vídeo de vinheta com efeito de digitação usando Pillow + FFmpeg.
+    - Duração: 4s (título até 30 chars) ou 5s (título > 30 chars)
+    - Texto roxo (#a470ef), fundo preto
+    - Label do programa (coluna F) acima do título em cinza
+    - Cursor piscante e linha expansiva
+    """
+    try:
+        from PIL import Image, ImageDraw, ImageFont
+    except ImportError:
+        log("  Pillow não instalado — gerando vinheta estática via FFmpeg.")
+        return _generate_title_card_fallback(titulo, label_programa, output_path)
+
+    W, H = 1920, 1080
+    FPS = 30
+    duracao = 4 if len(titulo) <= 30 else 5
+    total_frames = duracao * FPS
+    typing_frames = int(total_frames * 0.65)
+    chars = len(titulo)
+
+    font_paths = [
+        "/usr/share/fonts/truetype/dejavu/DejaVuSans-Bold.ttf",
+        "/usr/share/fonts/truetype/liberation/LiberationSans-Bold.ttf",
+        "/usr/share/fonts/truetype/freefont/FreeSansBold.ttf",
+    ]
+    font = font_small = None
+    for fp in font_paths:
+        if os.path.exists(fp):
+            font       = ImageFont.truetype(fp, 88)
+            font_small = ImageFont.truetype(fp, 34)
+            break
+    if font is None:
+        font = font_small = ImageFont.load_default()
+
+    purple = (164, 112, 239)
+    white  = (255, 255, 255)
+    black  = (0, 0, 0)
+    gray   = (110, 110, 110)
+
+    tmp = Image.new("RGB", (W, H), black)
+    td  = ImageDraw.Draw(tmp)
+    fb  = td.textbbox((0, 0), titulo, font=font)
+    text_w = fb[2] - fb[0]
+    text_h = fb[3] - fb[1]
+    x0 = (W - text_w) // 2
+    y0 = (H - text_h) // 2 - 20
+
+    frames_dir = f"/tmp/tc_frames_{os.getpid()}"
+    os.makedirs(frames_dir, exist_ok=True)
+
+    step = 2
+    for fi in range(0, total_frames, step):
+        img  = Image.new("RGB", (W, H), black)
+        draw = ImageDraw.Draw(img)
+
+        n_chars = chars if fi >= typing_frames else max(1, int((fi / typing_frames) * chars))
+        current = titulo[:n_chars]
+        show_cursor = (fi // 15) % 2 == 0
+
+        draw.text((x0 + 3, y0 + 3), current, font=font, fill=(30, 0, 55))
+        draw.text((x0, y0), current, font=font, fill=purple)
+
+        if n_chars < chars or fi < typing_frames + FPS:
+            cb = draw.textbbox((0, 0), current, font=font)
+            cx = x0 + (cb[2] - cb[0]) + 6
+            if show_cursor:
+                draw.text((cx, y0), "_", font=font, fill=white)
+
+        lp = min(1.0, fi / max(1, typing_frames * 0.75))
+        lw = int(text_w * lp)
+        ly = y0 + text_h + 16
+        if lw > 0:
+            draw.rectangle([x0, ly, x0 + lw, ly + 3], fill=purple)
+
+        if label_programa:
+            alpha = min(200, fi * 15)
+            lc = tuple(int(c * alpha / 200) for c in gray)
+            lb = draw.textbbox((0, 0), label_programa, font=font_small)
+            lx = (W - (lb[2] - lb[0])) // 2
+            draw.text((lx, y0 - 68), label_programa, font=font_small, fill=lc)
+
+        img.save(f"{frames_dir}/f{fi:05d}.png")
+
+    for fi in range(total_frames):
+        target = f"{frames_dir}/f{fi:05d}.png"
+        if not os.path.exists(target):
+            prev = (fi // step) * step
+            src  = f"{frames_dir}/f{prev:05d}.png"
+            shutil.copy(src, target)
+
+    cmd = [
+        "ffmpeg", "-y",
+        "-framerate", str(FPS),
+        "-i", f"{frames_dir}/f%05d.png",
+        "-f", "lavfi", "-i", "anullsrc=r=44100:cl=stereo",
+        "-t", str(duracao),
+        "-c:v", "libx264", "-preset", "ultrafast", "-crf", "18",
+        "-vf", "scale=1920:1080",
+        "-c:a", "aac", "-b:a", "160k", "-ar", "44100",
+        "-r", str(FPS), "-g", "60",
+        "-keyint_min", "60", "-sc_threshold", "0",
+        "-video_track_timescale", "90000",
+        "-avoid_negative_ts", "make_zero",
+        "-shortest", output_path
+    ]
+    result = subprocess.run(cmd, capture_output=True, text=True, timeout=120)
+    shutil.rmtree(frames_dir, ignore_errors=True)
+
+    if result.returncode == 0 and os.path.exists(output_path):
+        log(f"  ✓ Vinheta gerada: '{titulo}' ({duracao}s)")
+        return True
+    log(f"  FALHA ao gerar vinheta: {result.stderr[-200:]}")
+    return False
+
+def _generate_title_card_fallback(titulo, label_programa, output_path):
+    """Fallback sem Pillow: texto estático via FFmpeg drawtext."""
+    duracao = 4 if len(titulo) <= 30 else 5
+    titulo_safe = titulo.replace("'", "\\'").replace(":", "\\:")
+    label_safe  = label_programa.replace("'", "\\'").replace(":", "\\:")
+    vf = (
+        f"drawtext=text='{label_safe}':fontfile=/usr/share/fonts/truetype/dejavu/DejaVuSans-Bold.ttf"
+        f":fontsize=34:fontcolor=0x6e6e6e:x=(w-text_w)/2:y=(h/2)-120,"
+        f"drawtext=text='{titulo_safe}':fontfile=/usr/share/fonts/truetype/dejavu/DejaVuSans-Bold.ttf"
+        f":fontsize=88:fontcolor=0xa470ef:x=(w-text_w)/2:y=(h-text_h)/2-20"
+    )
+    cmd = [
+        "ffmpeg", "-y",
+        "-f", "lavfi", "-i", f"color=c=black:size=1920x1080:rate=30:duration={duracao}",
+        "-f", "lavfi", "-i", "anullsrc=r=44100:cl=stereo",
+        "-t", str(duracao), "-vf", vf,
+        "-c:v", "libx264", "-preset", "ultrafast", "-crf", "18",
+        "-c:a", "aac", "-b:a", "160k", "-ar", "44100",
+        "-r", "30", "-g", "60", "-keyint_min", "60", "-sc_threshold", "0",
+        "-video_track_timescale", "90000", "-avoid_negative_ts", "make_zero",
+        "-shortest", output_path
+    ]
+    result = subprocess.run(cmd, capture_output=True, text=True, timeout=60)
+    if result.returncode == 0 and os.path.exists(output_path):
+        log(f"  ✓ Vinheta estática (fallback): '{titulo}' ({duracao}s)")
+        return True
+    log(f"  FALHA no fallback: {result.stderr[-200:]}")
+    return False
+
+# ── FIM VINHETA ────────────────────────────────────────────────────────────
 
 def download_video(drive_id, output_path):
     MIN_BYTES = 5 * 1024 * 1024
@@ -314,8 +481,9 @@ def update_status(sheet, rows, status):
         status_col = len(headers) + 1
         sheet.update_cell(1, status_col, "Status")
     for row_num in rows:
-        sheet.update_cell(row_num, status_col, status)
-    log(f"Status '{status}' atualizado para linhas: {rows}")
+        if row_num is not None:
+            sheet.update_cell(row_num, status_col, status)
+    log(f"Status '{status}' atualizado para linhas: {[r for r in rows if r is not None]}")
 
 def main():
     log("=== EMPIRE TV — INICIANDO TRANSMISSÃO ===")
@@ -361,6 +529,14 @@ def main():
     for i, v in enumerate(videos):
         raw_path  = f"/tmp/raw_{v['drive_id']}.mp4"
         norm_path = f"/tmp/norm_{i:03d}_{v['drive_id']}.mp4"
+
+        # ── VINHETA DE TÍTULO ─────────────────────────────────────────────
+        if v.get("tipo", "").strip() == "Título" and v.get("titulo", "").strip():
+            card_path = f"/tmp/card_{i:03d}.mp4"
+            log(f"[{i+1}] Gerando vinheta: '{v['titulo']}' [{v.get('label_programa', '')}]")
+            if generate_title_card(v["titulo"], v.get("label_programa", ""), card_path):
+                video_paths.append((card_path, None))
+        # ──────────────────────────────────────────────────────────────────
 
         log(f"[{i+1}/{len(videos)}] Baixando: {v['programa']} ({v['drive_id']})")
         if not download_video(v["drive_id"], raw_path):
@@ -410,7 +586,7 @@ def main():
         except Exception:
             pass
 
-    transmitted_rows = [row for _, row in video_paths]
+    transmitted_rows = [row for _, row in video_paths if row is not None]
     if success:
         update_status(sheet, transmitted_rows, "Finalizado")
         log("=== TRANSMISSÃO CONCLUÍDA COM SUCESSO ===")
