@@ -3,6 +3,7 @@ import sys
 import json
 import subprocess
 import shutil
+import re
 from datetime import datetime
 import pytz
 import gspread
@@ -32,8 +33,41 @@ def setup_gspread():
     log("Autenticado com sucesso!")
     return client
 
+# ── DETECÇÃO DE FONTE DO VÍDEO ──────────────────────────────────────────────
+
+def extract_source(val):
+    """
+    Retorna (tipo, valor):
+      - ('youtube', url)   → URL do YouTube (youtube.com ou youtu.be)
+      - ('drive', id)      → ID do Google Drive
+      - ('', '')           → inválido
+    """
+    if not val:
+        return ("", "")
+    val = val.strip()
+
+    # YouTube
+    if "youtube.com" in val or "youtu.be" in val:
+        return ("youtube", val)
+
+    # Google Drive — extrai ID de URL ou aceita ID puro
+    if "drive.google.com" in val:
+        m = re.search(r"/d/([a-zA-Z0-9_-]{10,})(?:/|\?|$)", val)
+        return ("drive", m.group(1)) if m else ("", "")
+
+    if re.match(r"^[a-zA-Z0-9_-]{10,}$", val):
+        return ("drive", val)
+
+    return ("", "")
+
+def extract_drive_id(val):
+    """Mantido para compatibilidade — retorna só o ID do Drive."""
+    tipo, valor = extract_source(val)
+    return valor if tipo == "drive" else (val.strip() if val.strip() else "")
+
+# ── FIM DETECÇÃO ────────────────────────────────────────────────────────────
+
 def get_pending_videos(sheet):
-    import re
     raw_data = sheet.get_all_values()
     if not raw_data or len(raw_data) < 2:
         log("Planilha vazia.")
@@ -42,73 +76,63 @@ def get_pending_videos(sheet):
     records = [dict(zip(headers, row)) for row in raw_data[1:]]
     now = datetime.now(TZ_SP)
 
-    if MODO_TESTE:
-        log("*** MODO TESTE ATIVO — ignorando validação de data/hora ***")
-        videos = []
-        for idx, r in enumerate(records):
-            status = str(r.get("Status", "")).strip().lower()
-            if status in ("finalizado", "transmitindo", "falha"):
-                continue
-            drive_raw = str(r.get("Drive_ID") or r.get("Drive_Video_ID") or "").strip()
-            drive_id = extract_drive_id(drive_raw)
-            try:
-                duracao = int(str(r.get("Duracao_Seg") or r.get("Duracao_Segundos") or "0").strip())
-            except ValueError:
-                duracao = 0
-            if not drive_id or duracao <= 0:
-                log(f"Linha {idx+2} ignorada: Drive_ID ou Duracao_Seg ausente/inválido.")
-                continue
-            programa = str(r.get("Programa", "Empire TV")).strip()
-            data_str = str(r.get("Data", "")).strip()
-            horario  = str(r.get("Horario", "")).strip()
-            raw_row = raw_data[idx + 1]
-            label_programa = str(raw_row[5]).strip() if len(raw_row) > 5 else programa
-            tipo   = str(raw_row[6]).strip() if len(raw_row) > 6 else ""
-            titulo = str(raw_row[7]).strip() if len(raw_row) > 7 else ""
-            videos.append({
-                "row": idx + 2, "drive_id": drive_id, "programa": programa,
-                "duracao": duracao, "horario": f"{data_str} {horario}".strip(),
-                "label_programa": label_programa, "tipo": tipo, "titulo": titulo,
-            })
-        return videos
-
-    candidatos = []
-    for idx, r in enumerate(records):
+    def parse_row(idx, r):
         status = str(r.get("Status", "")).strip().lower()
         if status in ("finalizado", "transmitindo", "falha"):
-            continue
-        drive_raw = str(r.get("Drive_ID") or r.get("Drive_Video_ID") or "").strip()
-        drive_id = extract_drive_id(drive_raw)
+            return None
+        raw_val = str(r.get("Drive_ID") or r.get("Drive_Video_ID") or "").strip()
+        tipo_src, valor_src = extract_source(raw_val)
+        if not valor_src:
+            log(f"Linha {idx+2} ignorada: Drive_ID/URL ausente ou inválido.")
+            return None
         try:
             duracao = int(str(r.get("Duracao_Seg") or r.get("Duracao_Segundos") or "0").strip())
         except ValueError:
             duracao = 0
+        if duracao <= 0:
+            log(f"Linha {idx+2} ignorada: Duracao_Seg ausente/inválido.")
+            return None
+        programa = str(r.get("Programa", "Empire TV")).strip()
         data_str = str(r.get("Data", "")).strip()
         horario  = str(r.get("Horario", "")).strip()
-        programa = str(r.get("Programa", "Empire TV")).strip()
-        if not drive_id or duracao <= 0:
-            log(f"Linha {idx+2} ignorada: Drive_ID ou Duracao_Seg ausente/inválido.")
-            continue
-        if not horario:
-            log(f"Linha {idx+2} ({programa}) sem horário — ignorando.")
-            continue
-        sched = parse_datetime(data_str, horario, now)
-        if not sched:
-            log(f"Linha {idx+2} ({programa}) com data/hora inválida: '{data_str} {horario}' — ignorando.")
-            continue
-        raw_row = raw_data[idx + 1]
+        raw_row  = raw_data[idx + 1]
         label_programa = str(raw_row[5]).strip() if len(raw_row) > 5 else programa
-        tipo   = str(raw_row[6]).strip() if len(raw_row) > 6 else ""
-        titulo = str(raw_row[7]).strip() if len(raw_row) > 7 else ""
+        tipo_col = str(raw_row[6]).strip() if len(raw_row) > 6 else ""
+        titulo   = str(raw_row[7]).strip() if len(raw_row) > 7 else ""
+        return {
+            "row": idx + 2, "fonte_tipo": tipo_src, "fonte_valor": valor_src,
+            "programa": programa, "duracao": duracao,
+            "data_str": data_str, "horario": horario,
+            "label_programa": label_programa, "tipo": tipo_col, "titulo": titulo,
+        }
+
+    if MODO_TESTE:
+        log("*** MODO TESTE ATIVO — ignorando validação de data/hora ***")
+        videos = []
+        for idx, r in enumerate(records):
+            entry = parse_row(idx, r)
+            if entry:
+                entry["horario"] = f"{entry['data_str']} {entry['horario']}".strip()
+                videos.append(entry)
+        return videos
+
+    candidatos = []
+    for idx, r in enumerate(records):
+        entry = parse_row(idx, r)
+        if not entry:
+            continue
+        if not entry["horario"]:
+            log(f"Linha {entry['row']} ({entry['programa']}) sem horário — ignorando.")
+            continue
+        sched = parse_datetime(entry["data_str"], entry["horario"], now)
+        if not sched:
+            log(f"Linha {entry['row']} ({entry['programa']}) data/hora inválida — ignorando.")
+            continue
         if now >= sched:
-            candidatos.append({
-                "row": idx + 2, "drive_id": drive_id, "programa": programa,
-                "duracao": duracao, "data_str": data_str, "horario": horario,
-                "sched": sched, "label_programa": label_programa,
-                "tipo": tipo, "titulo": titulo,
-            })
+            entry["sched"] = sched
+            candidatos.append(entry)
         else:
-            log(f"Linha {idx+2} ({programa}) agendada para {data_str} {horario} — ainda não chegou.")
+            log(f"Linha {entry['row']} ({entry['programa']}) agendada para {entry['data_str']} {entry['horario']} — ainda não chegou.")
 
     if not candidatos:
         return []
@@ -116,12 +140,9 @@ def get_pending_videos(sheet):
     sched_mais_cedo = min(c["sched"] for c in candidatos)
     programa_ativo  = next(c["programa"] for c in candidatos if c["sched"] == sched_mais_cedo)
     log(f"Grupo ativo: '{programa_ativo}' — início {sched_mais_cedo.strftime('%d/%m/%Y %H:%M')}")
+
     grupo = [
-        {
-            "row": c["row"], "drive_id": c["drive_id"], "programa": c["programa"],
-            "duracao": c["duracao"], "horario": f"{c['data_str']} {c['horario']}".strip(),
-            "label_programa": c["label_programa"], "tipo": c["tipo"], "titulo": c["titulo"],
-        }
+        {**c, "horario": f"{c['data_str']} {c['horario']}".strip()}
         for c in candidatos
         if c["programa"] == programa_ativo and c["sched"] == sched_mais_cedo
     ]
@@ -147,21 +168,9 @@ def parse_datetime(data_str, horario_str, now):
             continue
     return None
 
-def extract_drive_id(val):
-    if not val:
-        return ""
-    import re
-    if "drive.google.com" in val or val.startswith("http"):
-        m = re.search(r"/d/([a-zA-Z0-9_-]{10,})(?:/|\?|$)", val)
-        return m.group(1) if m else ""
-    if re.match(r"^[a-zA-Z0-9_-]{10,}$", val):
-        return val
-    return ""
-
-# ── VINHETA ANIMADA ─────────────────────────────────────────────────────
+# ── VINHETA ANIMADA ──────────────────────────────────────────────────────────
 
 def _wrap_text(text, font, draw, max_width):
-    """Quebra o texto em linhas que caibam dentro de max_width pixels."""
     words = text.split()
     lines = []
     current = ""
@@ -179,14 +188,6 @@ def _wrap_text(text, font, draw, max_width):
     return lines
 
 def generate_title_card(titulo, label_programa, output_path):
-    """
-    Gera vídeo de vinheta com efeito de digitação usando Pillow + FFmpeg.
-    - Duração: sempre 10 segundos
-    - Texto roxo (#a470ef), fundo preto
-    - Quebra de linha automática: nunca passa da borda da tela
-    - Fonte reduzida automaticamente se necessário
-    - Label do programa (coluna F) acima do título em cinza
-    """
     try:
         from PIL import Image, ImageDraw, ImageFont
     except ImportError:
@@ -197,52 +198,39 @@ def generate_title_card(titulo, label_programa, output_path):
     FPS = 30
     DURACAO = 10
     total_frames = DURACAO * FPS
-    typing_frames = int(total_frames * 0.5)  # digita na primeira metade
-    MAX_TXT_W = 1720  # margem de 100px de cada lado
+    typing_frames = int(total_frames * 0.5)
+    MAX_TXT_W = 1720
 
     font_paths = [
         "/usr/share/fonts/truetype/dejavu/DejaVuSans-Bold.ttf",
         "/usr/share/fonts/truetype/liberation/LiberationSans-Bold.ttf",
         "/usr/share/fonts/truetype/freefont/FreeSansBold.ttf",
     ]
-    font_path = None
-    for fp in font_paths:
-        if os.path.exists(fp):
-            font_path = fp
-            break
+    font_path = next((fp for fp in font_paths if os.path.exists(fp)), None)
 
-    # Ajusta tamanho da fonte até caber (começa em 88, reduz até 48)
     font_size = 88
-    font = font_small = None
     tmp_img  = Image.new("RGB", (W, H), (0, 0, 0))
     tmp_draw = ImageDraw.Draw(tmp_img)
     while font_size >= 48:
-        if font_path:
-            font = ImageFont.truetype(font_path, font_size)
-        else:
-            font = ImageFont.load_default()
-        # verifica se a linha mais longa cabe
+        font = ImageFont.truetype(font_path, font_size) if font_path else ImageFont.load_default()
         lines = _wrap_text(titulo, font, tmp_draw, MAX_TXT_W)
         widths = [tmp_draw.textbbox((0, 0), l, font=font)[2] for l in lines]
         if max(widths) <= MAX_TXT_W:
             break
         font_size -= 4
 
-    if font_path:
-        font_small = ImageFont.truetype(font_path, max(24, font_size // 3))
-    else:
-        font_small = font
+    font       = ImageFont.truetype(font_path, font_size) if font_path else ImageFont.load_default()
+    font_small = ImageFont.truetype(font_path, max(24, font_size // 3)) if font_path else font
 
     purple = (164, 112, 239)
     white  = (255, 255, 255)
     black  = (0, 0, 0)
     gray   = (110, 110, 110)
 
-    # Calcula layout final com as linhas quebradas
-    lines = _wrap_text(titulo, font, tmp_draw, MAX_TXT_W)
-    line_h = tmp_draw.textbbox((0, 0), "Ag", font=font)[3] + 12  # altura de linha + espaçamento
+    lines   = _wrap_text(titulo, font, tmp_draw, MAX_TXT_W)
+    line_h  = tmp_draw.textbbox((0, 0), "Ag", font=font)[3] + 12
     block_h = line_h * len(lines)
-    y0_block = (H - block_h) // 2 - 20  # centro vertical do bloco de texto
+    y0_block = (H - block_h) // 2 - 20
     chars_total = len(titulo)
 
     frames_dir = f"/tmp/tc_frames_{os.getpid()}"
@@ -252,25 +240,17 @@ def generate_title_card(titulo, label_programa, output_path):
     for fi in range(0, total_frames, step):
         img  = Image.new("RGB", (W, H), black)
         draw = ImageDraw.Draw(img)
-
-        # quantos chars já foram "digitados"
         n_chars = chars_total if fi >= typing_frames else max(1, int((fi / typing_frames) * chars_total))
         current_text = titulo[:n_chars]
         show_cursor  = (fi // 15) % 2 == 0
-
-        # Renderiza linha por linha
         cur_lines = _wrap_text(current_text, font, draw, MAX_TXT_W)
         for li, line in enumerate(cur_lines):
             lb = draw.textbbox((0, 0), line, font=font)
             lw = lb[2] - lb[0]
             lx = (W - lw) // 2
             ly = y0_block + li * line_h
-            # sombra
             draw.text((lx + 3, ly + 3), line, font=font, fill=(30, 0, 55))
-            # texto roxo
             draw.text((lx, ly), line, font=font, fill=purple)
-
-        # Cursor piscante após o último char
         if n_chars < chars_total or fi < typing_frames + FPS:
             last_line = cur_lines[-1] if cur_lines else ""
             cb = draw.textbbox((0, 0), last_line, font=font)
@@ -279,29 +259,21 @@ def generate_title_card(titulo, label_programa, output_path):
             last_ly = y0_block + (len(cur_lines) - 1) * line_h
             if show_cursor:
                 draw.text((cx, last_ly), "_", font=font, fill=white)
-
-        # Linha decorativa roxa abaixo do bloco (expande conforme digita)
         lp = min(1.0, fi / max(1, typing_frames * 0.75))
-        max_lw = min(MAX_TXT_W, max(
-            draw.textbbox((0, 0), l, font=font)[2] for l in lines
-        ))
+        max_lw = min(MAX_TXT_W, max(draw.textbbox((0, 0), l, font=font)[2] for l in lines))
         bar_w = int(max_lw * lp)
         bar_y = y0_block + block_h + 16
         bar_x = (W - max_lw) // 2
         if bar_w > 0:
             draw.rectangle([bar_x, bar_y, bar_x + bar_w, bar_y + 3], fill=purple)
-
-        # Label do programa (coluna F) — fade-in rápido no topo
         if label_programa:
             alpha = min(200, fi * 10)
             lc = tuple(int(c * alpha / 200) for c in gray)
             lb2 = draw.textbbox((0, 0), label_programa, font=font_small)
             lx2 = (W - (lb2[2] - lb2[0])) // 2
             draw.text((lx2, y0_block - 60), label_programa, font=font_small, fill=lc)
-
         img.save(f"{frames_dir}/f{fi:05d}.png")
 
-    # Preenche frames pulados
     for fi in range(total_frames):
         target = f"{frames_dir}/f{fi:05d}.png"
         if not os.path.exists(target):
@@ -325,7 +297,6 @@ def generate_title_card(titulo, label_programa, output_path):
     ]
     result = subprocess.run(cmd, capture_output=True, text=True, timeout=180)
     shutil.rmtree(frames_dir, ignore_errors=True)
-
     if result.returncode == 0 and os.path.exists(output_path):
         log(f"  ✓ Vinheta gerada: '{titulo}' (10s, {len(lines)} linha(s), fonte {font_size}px)")
         return True
@@ -333,7 +304,6 @@ def generate_title_card(titulo, label_programa, output_path):
     return False
 
 def _generate_title_card_fallback(titulo, label_programa, output_path):
-    """Fallback sem Pillow: texto estático via FFmpeg drawtext."""
     titulo_safe = titulo.replace("'", "\\'").replace(":", "\\:")
     label_safe  = label_programa.replace("'", "\\'").replace(":", "\\:")
     vf = (
@@ -360,22 +330,56 @@ def _generate_title_card_fallback(titulo, label_programa, output_path):
     log(f"  FALHA no fallback: {result.stderr[-200:]}")
     return False
 
-# ── FIM VINHETA ────────────────────────────────────────────────────────────
+# ── FIM VINHETA ──────────────────────────────────────────────────────────────
 
-def download_video(drive_id, output_path):
+# ── DOWNLOAD ─────────────────────────────────────────────────────────────────
+
+def download_video(fonte_tipo, fonte_valor, output_path):
     MIN_BYTES = 5 * 1024 * 1024
     if os.path.exists(output_path) and os.path.getsize(output_path) > MIN_BYTES:
         log(f"  Já em cache: {os.path.getsize(output_path)/1024/1024:.1f} MB")
         return True
     if os.path.exists(output_path):
         os.remove(output_path)
+
+    if fonte_tipo == "youtube":
+        return _download_youtube(fonte_valor, output_path, MIN_BYTES)
+    else:
+        return _download_drive(fonte_valor, output_path, MIN_BYTES)
+
+def _download_youtube(url, output_path, min_bytes):
+    log(f"  [YouTube] Baixando: {url}")
+    try:
+        result = subprocess.run(
+            [
+                "yt-dlp",
+                "--no-playlist",
+                "-f", "bestvideo[ext=mp4][height<=1080]+bestaudio[ext=m4a]/best[ext=mp4]/best",
+                "--merge-output-format", "mp4",
+                "-o", output_path,
+                url
+            ],
+            capture_output=True, text=True, timeout=600
+        )
+        if result.returncode == 0 and os.path.exists(output_path) and os.path.getsize(output_path) > min_bytes:
+            log(f"  [YouTube] Download OK: {os.path.getsize(output_path)/1024/1024:.1f} MB")
+            return True
+        log(f"  [YouTube] ⚠ FALHA — vídeo pode estar protegido, com restrição de região ou removido.")
+        log(f"  [YouTube] Detalhe: {result.stderr[-200:]}")
+    except Exception as e:
+        log(f"  [YouTube] ⚠ ERRO inesperado: {e}")
+    if os.path.exists(output_path):
+        os.remove(output_path)
+    return False
+
+def _download_drive(drive_id, output_path, min_bytes):
     url = f"https://drive.google.com/file/d/{drive_id}/view"
     try:
         result = subprocess.run(
             ["yt-dlp", "--no-playlist", "-o", output_path, url],
             capture_output=True, text=True, timeout=600
         )
-        if result.returncode == 0 and os.path.exists(output_path) and os.path.getsize(output_path) > MIN_BYTES:
+        if result.returncode == 0 and os.path.exists(output_path) and os.path.getsize(output_path) > min_bytes:
             log(f"  Download OK: {os.path.getsize(output_path)/1024/1024:.1f} MB")
             return True
         log(f"  yt-dlp falhou ({result.returncode}): {result.stderr[-150:]}")
@@ -387,7 +391,6 @@ def download_video(drive_id, output_path):
         dl_url = f"https://drive.google.com/uc?export=download&id={drive_id}"
         resp = session.get(dl_url, stream=True, timeout=30)
         if "text/html" in resp.headers.get("Content-Type", ""):
-            import re
             html = resp.text
             m = re.search(r'name="uuid"\s+value="([^"]+)"', html) or re.search(r'confirm=([0-9A-Za-z_\-]+)', html)
             token = m.group(1) if m else ""
@@ -400,7 +403,7 @@ def download_video(drive_id, output_path):
                 if chunk:
                     f.write(chunk)
                     total += len(chunk)
-        if total > MIN_BYTES:
+        if total > min_bytes:
             log(f"  Download OK (requests): {total/1024/1024:.1f} MB")
             return True
         log(f"  requests: arquivo pequeno ({total} bytes).")
@@ -411,6 +414,8 @@ def download_video(drive_id, output_path):
         if os.path.exists(output_path):
             os.remove(output_path)
     return False
+
+# ── FIM DOWNLOAD ──────────────────────────────────────────────────────────────
 
 def normalize_video(input_path, output_path):
     cmd = [
@@ -489,7 +494,6 @@ def transmit_playlist(video_paths, rtmp_url, rtmp_key):
     return process.returncode == 0
 
 def update_status(sheet, rows, status):
-    import re
     headers = sheet.row_values(1)
     headers_clean = [re.sub(r'^[A-Z]\s*[—-]\s*', '', h).strip() for h in headers]
     status_col = None
@@ -507,10 +511,7 @@ def update_status(sheet, rows, status):
 
 def main():
     log("=== EMPIRE TV — INICIANDO TRANSMISSÃO ===")
-    if MODO_TESTE:
-        log("=== MODO: TESTE MANUAL ===")
-    else:
-        log("=== MODO: AUTOMÁTICO (agendado) ===")
+    log("=== MODO: TESTE MANUAL ===" if MODO_TESTE else "=== MODO: AUTOMÁTICO (agendado) ===")
 
     spreadsheet_id = os.environ.get("SPREADSHEET_ID")
     rtmp_url = os.environ.get("RTMP_URL")
@@ -520,6 +521,7 @@ def main():
     if not all([spreadsheet_id, rtmp_url, rtmp_key]):
         log("ERRO: SPREADSHEET_ID, RTMP_URL ou RTMP_KEY ausentes!")
         sys.exit(1)
+
     client = setup_gspread()
     try:
         spreadsheet = client.open_by_key(spreadsheet_id) if len(spreadsheet_id) > 40 else client.open(spreadsheet_id)
@@ -538,7 +540,8 @@ def main():
 
     log(f"{len(videos)} vídeo(s) encontrado(s) para transmissão:")
     for i, v in enumerate(videos):
-        log(f"  [{i+1}] {v['programa']} — ID: {v['drive_id']} ({v['duracao']}s) [{v['horario']}]")
+        fonte_label = f"[YouTube] {v['fonte_valor']}" if v['fonte_tipo'] == 'youtube' else f"[Drive] {v['fonte_valor']}"
+        log(f"  [{i+1}] {v['programa']} — {fonte_label} ({v['duracao']}s) [{v['horario']}]")
 
     update_status(sheet, [v["row"] for v in videos], "Transmitindo")
 
@@ -547,8 +550,9 @@ def main():
     failed_rows = []
 
     for i, v in enumerate(videos):
-        raw_path  = f"/tmp/raw_{v['drive_id']}.mp4"
-        norm_path = f"/tmp/norm_{i:03d}_{v['drive_id']}.mp4"
+        safe_id = re.sub(r'[^a-zA-Z0-9_-]', '_', v['fonte_valor'])[:40]
+        raw_path  = f"/tmp/raw_{safe_id}.mp4"
+        norm_path = f"/tmp/norm_{i:03d}_{safe_id}.mp4"
 
         if v.get("tipo", "").strip() == "Título" and v.get("titulo", "").strip():
             card_path = f"/tmp/card_{i:03d}.mp4"
@@ -556,8 +560,8 @@ def main():
             if generate_title_card(v["titulo"], v.get("label_programa", ""), card_path):
                 video_paths.append((card_path, None))
 
-        log(f"[{i+1}/{len(videos)}] Baixando: {v['programa']} ({v['drive_id']})")
-        if not download_video(v["drive_id"], raw_path):
+        log(f"[{i+1}/{len(videos)}] Baixando: {v['programa']} ({v['fonte_tipo'].upper()})")
+        if not download_video(v["fonte_tipo"], v["fonte_valor"], raw_path):
             log(f"  FALHA no download — vídeo {i+1} será pulado")
             failed_rows.append(v["row"])
             continue
