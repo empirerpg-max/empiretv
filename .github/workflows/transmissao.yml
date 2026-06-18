@@ -37,9 +37,9 @@ jobs:
       - name: Instalar Dependências e FFmpeg no Servidor do Actions
         run: |
           sudo apt-get update
-          sudo apt-get install -y ffmpeg
+          sudo apt-get install -y ffmpeg fonts-dejavu-core
           python -m pip install --upgrade pip
-          pip install gspread oauth2client pytz requests yt-dlp
+          pip install gspread oauth2client pytz requests yt-dlp Pillow
 
       - name: Executar script de automação e iniciar Live Stream
         env:
