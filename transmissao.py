@@ -49,14 +49,13 @@ def get_pending_videos(sheet):
             status = str(r.get("Status", "")).strip().lower()
             if status in ("finalizado", "transmitindo", "falha"):
                 continue
-            drive_raw = str(r.get("Drive_ID") or r.get("Drive_Video_ID") or "").strip()
-            drive_id = extract_drive_id(drive_raw)
-            try:
-                duracao = int(str(r.get("Duracao_Seg") or r.get("Duracao_Segundos") or "0").strip())
-            except ValueError:
-                duracao = 0
-            if not drive_id or duracao <= 0:
-                log(f"Linha {idx+2} ignorada: Drive_ID ou Duracao_Seg ausente/inválido.")
+            link_raw = str(
+                r.get("Drive_ID") or r.get("Drive_Video_ID") or r.get("Link") or r.get("Video_URL") or ""
+            ).strip()
+            fonte = extract_source(link_raw)
+            duracao = _parse_duracao(r)
+            if not fonte:
+                log(f"Linha {idx+2} ignorada: link do Drive/YouTube ausente ou inválido.")
                 continue
             programa = str(r.get("Programa", "Empire TV")).strip()
             data_str = str(r.get("Data", "")).strip()
@@ -66,7 +65,7 @@ def get_pending_videos(sheet):
             tipo   = str(raw_row[6]).strip() if len(raw_row) > 6 else ""
             titulo = str(raw_row[7]).strip() if len(raw_row) > 7 else ""
             videos.append({
-                "row": idx + 2, "drive_id": drive_id, "programa": programa,
+                "row": idx + 2, "fonte": fonte, "programa": programa,
                 "duracao": duracao, "horario": f"{data_str} {horario}".strip(),
                 "label_programa": label_programa, "tipo": tipo, "titulo": titulo,
             })
@@ -77,17 +76,16 @@ def get_pending_videos(sheet):
         status = str(r.get("Status", "")).strip().lower()
         if status in ("finalizado", "transmitindo", "falha"):
             continue
-        drive_raw = str(r.get("Drive_ID") or r.get("Drive_Video_ID") or "").strip()
-        drive_id = extract_drive_id(drive_raw)
-        try:
-            duracao = int(str(r.get("Duracao_Seg") or r.get("Duracao_Segundos") or "0").strip())
-        except ValueError:
-            duracao = 0
+        link_raw = str(
+            r.get("Drive_ID") or r.get("Drive_Video_ID") or r.get("Link") or r.get("Video_URL") or ""
+        ).strip()
+        fonte = extract_source(link_raw)
+        duracao = _parse_duracao(r)
         data_str = str(r.get("Data", "")).strip()
         horario  = str(r.get("Horario", "")).strip()
         programa = str(r.get("Programa", "Empire TV")).strip()
-        if not drive_id or duracao <= 0:
-            log(f"Linha {idx+2} ignorada: Drive_ID ou Duracao_Seg ausente/inválido.")
+        if not fonte:
+            log(f"Linha {idx+2} ignorada: link do Drive/YouTube ausente ou inválido.")
             continue
         if not horario:
             log(f"Linha {idx+2} ({programa}) sem horário — ignorando.")
@@ -102,7 +100,7 @@ def get_pending_videos(sheet):
         titulo = str(raw_row[7]).strip() if len(raw_row) > 7 else ""
         if now >= sched:
             candidatos.append({
-                "row": idx + 2, "drive_id": drive_id, "programa": programa,
+                "row": idx + 2, "fonte": fonte, "programa": programa,
                 "duracao": duracao, "data_str": data_str, "horario": horario,
                 "sched": sched, "label_programa": label_programa,
                 "tipo": tipo, "titulo": titulo,
@@ -113,20 +111,26 @@ def get_pending_videos(sheet):
     if not candidatos:
         return []
 
-    sched_mais_cedo = min(c["sched"] for c in candidatos)
-    programa_ativo  = next(c["programa"] for c in candidatos if c["sched"] == sched_mais_cedo)
-    log(f"Grupo ativo: '{programa_ativo}' — início {sched_mais_cedo.strftime('%d/%m/%Y %H:%M')}")
+    # Roda toda a programação já vencida (Horario <= agora), em ordem cronológica
+    # de agendamento (e pela ordem da planilha em caso de empate) — sem filtrar
+    # por "Programa" nem exigir horário idêntico entre as linhas.
+    candidatos.sort(key=lambda c: (c["sched"], c["row"]))
+    log(f"{len(candidatos)} item(ns) vencido(s) — transmitindo em ordem de agendamento.")
     grupo = [
         {
-            "row": c["row"], "drive_id": c["drive_id"], "programa": c["programa"],
+            "row": c["row"], "fonte": c["fonte"], "programa": c["programa"],
             "duracao": c["duracao"], "horario": f"{c['data_str']} {c['horario']}".strip(),
             "label_programa": c["label_programa"], "tipo": c["tipo"], "titulo": c["titulo"],
         }
         for c in candidatos
-        if c["programa"] == programa_ativo and c["sched"] == sched_mais_cedo
     ]
-    grupo.sort(key=lambda x: x["row"])
     return grupo
+
+def _parse_duracao(r):
+    try:
+        return int(str(r.get("Duracao_Seg") or r.get("Duracao_Segundos") or "0").strip())
+    except ValueError:
+        return 0
 
 def parse_datetime(data_str, horario_str, now):
     combined = f"{data_str} {horario_str}".strip() if data_str else horario_str.strip()
@@ -147,16 +151,35 @@ def parse_datetime(data_str, horario_str, now):
             continue
     return None
 
-def extract_drive_id(val):
+def extract_source(val):
+    """
+    Aceita o link direto colado na planilha — Google Drive (qualquer formato de
+    URL de compartilhamento) ou YouTube — ou apenas o ID do arquivo do Drive.
+    Retorna {"type": "drive"|"youtube", "id": ..., "url": ...} ou None se
+    o valor for inválido.
+    """
     if not val:
-        return ""
+        return None
     import re
-    if "drive.google.com" in val or val.startswith("http"):
-        m = re.search(r"/d/([a-zA-Z0-9_-]{10,})(?:/|\?|$)", val)
-        return m.group(1) if m else ""
+    val = val.strip()
+
+    if "youtube.com" in val or "youtu.be" in val:
+        return {"type": "youtube", "id": None, "url": val}
+
+    if "drive.google.com" in val or "docs.google.com" in val:
+        m = re.search(r"/d/([a-zA-Z0-9_-]{10,})", val) or re.search(r"[?&]id=([a-zA-Z0-9_-]{10,})", val)
+        if m:
+            return {"type": "drive", "id": m.group(1), "url": val}
+        return None
+
+    if val.startswith("http"):
+        # outro link direto (ex.: já é uma URL de streaming/arquivo hospedado)
+        return {"type": "url", "id": None, "url": val}
+
     if re.match(r"^[a-zA-Z0-9_-]{10,}$", val):
-        return val
-    return ""
+        return {"type": "drive", "id": val, "url": f"https://drive.google.com/file/d/{val}/view"}
+
+    return None
 
 # ── VINHETA ANIMADA ─────────────────────────────────────────────────────
 
@@ -342,18 +365,24 @@ def _generate_title_card_fallback(titulo, label_programa, output_path):
 
 # ── FIM VINHETA ────────────────────────────────────────────────────────────
 
-def download_video(drive_id, output_path):
+def download_video(fonte, output_path):
+    """
+    Baixa o vídeo a partir da fonte identificada por extract_source():
+    Google Drive (link direto colado na planilha) ou YouTube.
+    """
     MIN_BYTES = 5 * 1024 * 1024
     if os.path.exists(output_path) and os.path.getsize(output_path) > MIN_BYTES:
         log(f"  Já em cache: {os.path.getsize(output_path)/1024/1024:.1f} MB")
         return True
     if os.path.exists(output_path):
         os.remove(output_path)
-    url = f"https://drive.google.com/file/d/{drive_id}/view"
+
+    url = fonte["url"]
+    fmt_args = ["-f", "bv*+ba/b"] if fonte["type"] == "youtube" else []
     try:
         result = subprocess.run(
-            ["yt-dlp", "--no-playlist", "-o", output_path, url],
-            capture_output=True, text=True, timeout=600
+            ["yt-dlp", "--no-playlist", *fmt_args, "-o", output_path, url],
+            capture_output=True, text=True, timeout=1200
         )
         if result.returncode == 0 and os.path.exists(output_path) and os.path.getsize(output_path) > MIN_BYTES:
             log(f"  Download OK: {os.path.getsize(output_path)/1024/1024:.1f} MB")
@@ -361,6 +390,11 @@ def download_video(drive_id, output_path):
         log(f"  yt-dlp falhou ({result.returncode}): {result.stderr[-150:]}")
     except Exception as e:
         log(f"  yt-dlp erro: {e}")
+
+    if fonte["type"] != "drive" or not fonte["id"]:
+        return False
+
+    drive_id = fonte["id"]
     try:
         session = requests.Session()
         session.headers.update({"User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 Chrome/124.0.0.0 Safari/537.36"})
@@ -518,7 +552,7 @@ def main():
 
     log(f"{len(videos)} vídeo(s) encontrado(s) para transmissão:")
     for i, v in enumerate(videos):
-        log(f"  [{i+1}] {v['programa']} — ID: {v['drive_id']} ({v['duracao']}s) [{v['horario']}]")
+        log(f"  [{i+1}] {v['programa']} — {v['fonte']['type']}: {v['fonte']['url']} [{v['horario']}]")
 
     update_status(sheet, [v["row"] for v in videos], "Transmitindo")
 
@@ -527,8 +561,8 @@ def main():
     failed_rows = []
 
     for i, v in enumerate(videos):
-        raw_path  = f"/tmp/raw_{v['drive_id']}.mp4"
-        norm_path = f"/tmp/norm_{i:03d}_{v['drive_id']}.mp4"
+        raw_path  = f"/tmp/raw_{i:03d}.mp4"
+        norm_path = f"/tmp/norm_{i:03d}.mp4"
 
         if v.get("tipo", "").strip() == "Título" and v.get("titulo", "").strip():
             card_path = f"/tmp/card_{i:03d}.mp4"
@@ -536,8 +570,8 @@ def main():
             if generate_title_card(v["titulo"], v.get("label_programa", ""), card_path):
                 video_paths.append((card_path, None))
 
-        log(f"[{i+1}/{len(videos)}] Baixando: {v['programa']} ({v['drive_id']})")
-        if not download_video(v["drive_id"], raw_path):
+        log(f"[{i+1}/{len(videos)}] Baixando: {v['programa']} ({v['fonte']['url']})")
+        if not download_video(v["fonte"], raw_path):
             log(f"  FALHA no download — vídeo {i+1} será pulado")
             failed_rows.append(v["row"])
             continue
