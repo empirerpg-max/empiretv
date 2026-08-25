@@ -3,7 +3,7 @@ import sys
 import json
 import subprocess
 import shutil
-from datetime import datetime
+from datetime import datetime, timedelta
 import pytz
 import gspread
 from oauth2client.service_account import ServiceAccountCredentials
@@ -12,6 +12,11 @@ import requests
 TZ_SP = pytz.timezone("America/Sao_Paulo")
 
 MODO_TESTE = "--teste" in sys.argv
+
+# Inicia o download/preparo do vídeo com essa antecedência em relação ao
+# Horario agendado, pra garantir que já esteja pronto (baixado/normalizado)
+# no momento exato da transmissão.
+ANTECEDENCIA_MINUTOS = 20
 
 def log(msg):
     print(f"[{datetime.now(TZ_SP).strftime('%H:%M:%S')}] {msg}", flush=True)
@@ -98,7 +103,8 @@ def get_pending_videos(sheet):
         label_programa = str(raw_row[5]).strip() if len(raw_row) > 5 else programa
         tipo   = str(raw_row[6]).strip() if len(raw_row) > 6 else ""
         titulo = str(raw_row[7]).strip() if len(raw_row) > 7 else ""
-        if now >= sched:
+        inicio_processamento = sched - timedelta(minutes=ANTECEDENCIA_MINUTOS)
+        if now >= inicio_processamento:
             candidatos.append({
                 "row": idx + 2, "fonte": fonte, "programa": programa,
                 "duracao": duracao, "data_str": data_str, "horario": horario,
@@ -106,7 +112,7 @@ def get_pending_videos(sheet):
                 "tipo": tipo, "titulo": titulo,
             })
         else:
-            log(f"Linha {idx+2} ({programa}) agendada para {data_str} {horario} — ainda não chegou.")
+            log(f"Linha {idx+2} ({programa}) agendada para {data_str} {horario} — preparo inicia às {inicio_processamento.strftime('%H:%M')}, ainda não chegou.")
 
     if not candidatos:
         return []
