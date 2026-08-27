@@ -371,11 +371,23 @@ def _generate_title_card_fallback(titulo, label_programa, output_path):
 
 # ── FIM VINHETA ────────────────────────────────────────────────────────────
 
-def download_video(fonte, output_path):
+def download_video(fonte, output_path, tentativas=3):
     """
     Baixa o vídeo a partir da fonte identificada por extract_source():
     Google Drive (link direto colado na planilha) ou YouTube.
+    Tenta algumas vezes antes de desistir, pra absorver falhas passageiras
+    de rede/rate-limit sem pular o vídeo da transmissão.
     """
+    import time
+    for tentativa in range(1, tentativas + 1):
+        if tentativa > 1:
+            log(f"  Nova tentativa de download ({tentativa}/{tentativas})...")
+            time.sleep(5)
+        if _download_video_uma_vez(fonte, output_path):
+            return True
+    return False
+
+def _download_video_uma_vez(fonte, output_path):
     MIN_BYTES = 5 * 1024 * 1024
     if os.path.exists(output_path) and os.path.getsize(output_path) > MIN_BYTES:
         log(f"  Já em cache: {os.path.getsize(output_path)/1024/1024:.1f} MB")
@@ -556,82 +568,109 @@ def main():
         log("Nenhuma transmissão pendente para agora. Encerrando.")
         sys.exit(0)
 
-    log(f"{len(videos)} vídeo(s) encontrado(s) para transmissão:")
-    for i, v in enumerate(videos):
-        log(f"  [{i+1}] {v['programa']} — {v['fonte']['type']}: {v['fonte']['url']} [{v['horario']}]")
+    MAX_LOTES = 4  # limite de rodadas, pra não ficar em loop infinito com um clipe permanentemente quebrado
+    houve_falha_final = False
 
-    update_status(sheet, [v["row"] for v in videos], "Transmitindo")
+    for lote in range(1, MAX_LOTES + 1):
+        if lote > 1:
+            log(f"=== RETOMANDO {len(videos)} vídeo(s) que ficaram pendente(s) (rodada {lote}/{MAX_LOTES}) ===")
 
-    log("=== FASE 1: Preparando vídeos em ordem ===")
-    video_paths = []
-    failed_rows = []
+        log(f"{len(videos)} vídeo(s) encontrado(s) para transmissão:")
+        for i, v in enumerate(videos):
+            log(f"  [{i+1}] {v['programa']} — {v['fonte']['type']}: {v['fonte']['url']} [{v['horario']}]")
 
-    for i, v in enumerate(videos):
-        raw_path  = f"/tmp/raw_{i:03d}.mp4"
-        norm_path = f"/tmp/norm_{i:03d}.mp4"
+        update_status(sheet, [v["row"] for v in videos], "Transmitindo")
 
-        if v.get("tipo", "").strip() == "Título" and v.get("titulo", "").strip():
-            card_path = f"/tmp/card_{i:03d}.mp4"
-            log(f"[{i+1}] Gerando vinheta: '{v['titulo']}' [{v.get('label_programa', '')}]")
-            if generate_title_card(v["titulo"], v.get("label_programa", ""), card_path):
-                video_paths.append((card_path, None))
+        log("=== FASE 1: Preparando vídeos em ordem ===")
+        video_paths = []
+        failed_rows = []
 
-        log(f"[{i+1}/{len(videos)}] Baixando: {v['programa']} ({v['fonte']['url']})")
-        if not download_video(v["fonte"], raw_path):
-            log(f"  FALHA no download — vídeo {i+1} será pulado")
-            failed_rows.append(v["row"])
-            continue
+        for i, v in enumerate(videos):
+            raw_path  = f"/tmp/raw_{lote:02d}_{i:03d}.mp4"
+            norm_path = f"/tmp/norm_{lote:02d}_{i:03d}.mp4"
 
-        log(f"[{i+1}/{len(videos)}] Normalizando timestamps...")
-        if not normalize_video(raw_path, norm_path):
-            log(f"  FALHA na normalização — vídeo {i+1} será pulado")
-            failed_rows.append(v["row"])
+            if v.get("tipo", "").strip() == "Título" and v.get("titulo", "").strip():
+                card_path = f"/tmp/card_{lote:02d}_{i:03d}.mp4"
+                log(f"[{i+1}] Gerando vinheta: '{v['titulo']}' [{v.get('label_programa', '')}]")
+                if generate_title_card(v["titulo"], v.get("label_programa", ""), card_path):
+                    video_paths.append((card_path, None))
+
+            log(f"[{i+1}/{len(videos)}] Baixando: {v['programa']} ({v['fonte']['url']})")
+            if not download_video(v["fonte"], raw_path):
+                log(f"  FALHA no download (após múltiplas tentativas) — vídeo {i+1} será pulado")
+                failed_rows.append(v["row"])
+                continue
+
+            log(f"[{i+1}/{len(videos)}] Normalizando timestamps...")
+            if not normalize_video(raw_path, norm_path):
+                log(f"  FALHA na normalização — vídeo {i+1} será pulado")
+                failed_rows.append(v["row"])
+                if os.path.exists(raw_path):
+                    os.remove(raw_path)
+                continue
+
             if os.path.exists(raw_path):
                 os.remove(raw_path)
-            continue
 
-        if os.path.exists(raw_path):
-            os.remove(raw_path)
+            if validate_video(norm_path):
+                video_paths.append((norm_path, v["row"]))
+                log(f"  ✓ Vídeo {i+1} pronto")
+            else:
+                log(f"  Arquivo inválido — vídeo {i+1} pulado")
+                failed_rows.append(v["row"])
+                if os.path.exists(norm_path):
+                    os.remove(norm_path)
 
-        if validate_video(norm_path):
-            video_paths.append((norm_path, v["row"]))
-            log(f"  ✓ Vídeo {i+1} pronto")
+        if failed_rows:
+            update_status(sheet, failed_rows, "Pendente")
+
+        if not video_paths:
+            log("Nenhum vídeo pronto para transmitir nesta rodada. Abortando.")
+            update_status(sheet, [v["row"] for v in videos], "Falha")
+            sys.exit(1)
+
+        log(f"=== FASE 2: Transmitindo {len(video_paths)} vídeo(s) sem interrupção ===")
+        for i, (path, _) in enumerate(video_paths):
+            log(f"  [{i+1}] {os.path.basename(path)}")
+
+        paths_only = [p for p, _ in video_paths]
+        success = transmit_playlist(paths_only, rtmp_url, rtmp_key)
+
+        for path, _ in video_paths:
+            try:
+                if os.path.exists(path):
+                    os.remove(path)
+            except Exception:
+                pass
+
+        transmitted_rows = [row for _, row in video_paths if row is not None]
+        if success:
+            update_status(sheet, transmitted_rows, "Finalizado")
+            log(f"=== RODADA {lote} CONCLUÍDA COM SUCESSO ===")
         else:
-            log(f"  Arquivo inválido — vídeo {i+1} pulado")
-            failed_rows.append(v["row"])
-            if os.path.exists(norm_path):
-                os.remove(norm_path)
+            update_status(sheet, transmitted_rows, "Falha")
+            log(f"=== RODADA {lote} ENCERRADA COM FALHA ===")
+            houve_falha_final = True
+            break
 
-    if failed_rows:
-        update_status(sheet, failed_rows, "Pendente")
+        if not failed_rows:
+            break
 
-    if not video_paths:
-        log("Nenhum vídeo pronto para transmitir. Abortando.")
-        update_status(sheet, [v["row"] for v in videos], "Falha")
-        sys.exit(1)
-
-    log(f"=== FASE 2: Transmitindo {len(video_paths)} vídeo(s) sem interrupção ===")
-    for i, (path, _) in enumerate(video_paths):
-        log(f"  [{i+1}] {os.path.basename(path)}")
-
-    paths_only = [p for p, _ in video_paths]
-    success = transmit_playlist(paths_only, rtmp_url, rtmp_key)
-
-    for path, _ in video_paths:
-        try:
-            if os.path.exists(path):
-                os.remove(path)
-        except Exception:
-            pass
-
-    transmitted_rows = [row for _, row in video_paths if row is not None]
-    if success:
-        update_status(sheet, transmitted_rows, "Finalizado")
-        log("=== TRANSMISSÃO CONCLUÍDA COM SUCESSO ===")
+        # Alguns vídeos ficaram pendentes por falha de download/normalização —
+        # busca de novo (mesmo critério de elegibilidade) e tenta completá-los
+        # automaticamente em seguida, sem esperar o próximo gatilho externo.
+        videos = get_pending_videos(sheet)
+        if not videos:
+            log("Nenhum vídeo pendente restante — encerrando.")
+            break
     else:
-        update_status(sheet, transmitted_rows, "Falha")
+        log(f"Limite de {MAX_LOTES} rodadas atingido — algum vídeo pode ter ficado pendente permanentemente.")
+
+    if houve_falha_final:
         log("=== TRANSMISSÃO ENCERRADA COM FALHA ===")
         sys.exit(1)
+
+    log("=== TRANSMISSÃO CONCLUÍDA ===")
 
 if __name__ == "__main__":
     main()
