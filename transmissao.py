@@ -462,6 +462,14 @@ def normalize_video(input_path, output_path):
     return False
 
 def validate_video(path):
+    """
+    Valida o arquivo em duas etapas:
+    1. ffprobe: confirma que existe uma stream de vídeo (checagem rápida).
+    2. Decodificação completa (ffmpeg -f null): garante que o arquivo inteiro
+       decodifica sem erro, pra pegar downloads truncados/corrompidos que
+       passariam pela checagem 1 mas produzem artefatos visuais (cores/frames
+       quebrados) quando forem ao ar.
+    """
     try:
         result = subprocess.run(
             ["ffprobe", "-v", "error", "-select_streams", "v:0",
@@ -471,8 +479,23 @@ def validate_video(path):
         if result.returncode != 0:
             return False
         data = json.loads(result.stdout)
-        return len(data.get("streams", [])) > 0
+        if len(data.get("streams", [])) == 0:
+            return False
     except Exception:
+        return False
+
+    try:
+        result = subprocess.run(
+            ["ffmpeg", "-v", "error", "-i", path, "-f", "null", "-"],
+            capture_output=True, text=True, timeout=300
+        )
+        erros = result.stderr.strip()
+        if erros:
+            log(f"  Arquivo com erro de decodificação (provável corrupção): {erros[-300:]}")
+            return False
+        return True
+    except Exception as e:
+        log(f"  Falha ao verificar integridade do vídeo: {e}")
         return False
 
 def build_rtmp_dest(rtmp_url, rtmp_key):
