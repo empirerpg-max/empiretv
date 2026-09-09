@@ -69,10 +69,12 @@ def get_pending_videos(sheet):
             label_programa = str(raw_row[5]).strip() if len(raw_row) > 5 else programa
             tipo   = str(raw_row[6]).strip() if len(raw_row) > 6 else ""
             titulo = str(raw_row[7]).strip() if len(raw_row) > 7 else ""
+            topico_id = str(raw_row[10]).strip() if len(raw_row) > 10 else ""
             videos.append({
                 "row": idx + 2, "fonte": fonte, "programa": programa,
                 "duracao": duracao, "horario": f"{data_str} {horario}".strip(),
                 "label_programa": label_programa, "tipo": tipo, "titulo": titulo,
+                "topico_id": topico_id,
             })
         return videos
 
@@ -103,13 +105,14 @@ def get_pending_videos(sheet):
         label_programa = str(raw_row[5]).strip() if len(raw_row) > 5 else programa
         tipo   = str(raw_row[6]).strip() if len(raw_row) > 6 else ""
         titulo = str(raw_row[7]).strip() if len(raw_row) > 7 else ""
+        topico_id = str(raw_row[10]).strip() if len(raw_row) > 10 else ""
         inicio_processamento = sched - timedelta(minutes=ANTECEDENCIA_MINUTOS)
         if now >= inicio_processamento:
             candidatos.append({
                 "row": idx + 2, "fonte": fonte, "programa": programa,
                 "duracao": duracao, "data_str": data_str, "horario": horario,
                 "sched": sched, "label_programa": label_programa,
-                "tipo": tipo, "titulo": titulo,
+                "tipo": tipo, "titulo": titulo, "topico_id": topico_id,
             })
         else:
             log(f"Linha {idx+2} ({programa}) agendada para {data_str} {horario} — preparo inicia às {inicio_processamento.strftime('%H:%M')}, ainda não chegou.")
@@ -127,6 +130,7 @@ def get_pending_videos(sheet):
             "row": c["row"], "fonte": c["fonte"], "programa": c["programa"],
             "duracao": c["duracao"], "horario": f"{c['data_str']} {c['horario']}".strip(),
             "label_programa": c["label_programa"], "tipo": c["tipo"], "titulo": c["titulo"],
+            "topico_id": c["topico_id"],
         }
         for c in candidatos
     ]
@@ -543,6 +547,36 @@ def transmit_playlist(video_paths, rtmp_url, rtmp_key):
     print()
     return process.returncode == 0
 
+# ── NOTIFICAÇÃO DE INÍCIO/FIM REAL (Empire Hub) ─────────────────────────
+# Fecha o gap identificado pelo Empire Hub: até aqui, o fim real de uma
+# transmissão nunca chegava a lugar nenhum acessível pelo backend do app —
+# só existiam estimativas (Data/Horario+margem no backend, ou "início do
+# próximo item da grade" no Apps Script). Este script é o único lugar que
+# sabe de verdade quando o ffmpeg começa e termina — por isso avisa direto,
+# via HTTP, o backend do Empire Hub (POST /api/tv/evento-transmissao).
+# Best-effort: nunca deve derrubar a transmissão em si por causa disso.
+def notificar_evento_transmissao(topico_id, acao):
+    if not topico_id:
+        return
+    api_url = os.environ.get("EMPIRE_HUB_API_URL", "").rstrip("/")
+    secret = os.environ.get("TV_WEBHOOK_SECRET", "")
+    if not api_url or not secret:
+        log(f"[evento-transmissao] EMPIRE_HUB_API_URL/TV_WEBHOOK_SECRET não configurados — pulando aviso ({acao}: {topico_id}).")
+        return
+    try:
+        resp = requests.post(
+            f"{api_url}/api/tv/evento-transmissao",
+            json={"topico_id": topico_id, "acao": acao},
+            headers={"X-TV-Webhook-Secret": secret, "Content-Type": "application/json"},
+            timeout=15,
+        )
+        if resp.status_code == 200:
+            log(f"[evento-transmissao] ✓ Avisado '{acao}' pro Empire Hub — Topico_ID={topico_id}")
+        else:
+            log(f"[evento-transmissao] Aviso '{acao}' falhou ({resp.status_code}): {resp.text[:200]}")
+    except Exception as e:
+        log(f"[evento-transmissao] Erro ao avisar '{acao}' pro Empire Hub: {e}")
+
 def update_status(sheet, rows, status):
     import re
     headers = sheet.row_values(1)
@@ -656,8 +690,25 @@ def main():
         for i, (path, _) in enumerate(video_paths):
             log(f"  [{i+1}] {os.path.basename(path)}")
 
+        # Topico_ID de cada linha que realmente vai ao ar nessa rodada (na
+        # ordem em que aparecem no vídeo concatenado) — dedup preservando
+        # ordem, pra avisar "início" uma vez só por transmissão mesmo quando
+        # ela tem várias linhas/segmentos com o mesmo Topico_ID.
+        row_para_topico = {v["row"]: v.get("topico_id", "") for v in videos}
+        topicos_desta_rodada = []
+        for _, row in video_paths:
+            tid = row_para_topico.get(row, "")
+            if tid and tid not in topicos_desta_rodada:
+                topicos_desta_rodada.append(tid)
+
+        for tid in topicos_desta_rodada:
+            notificar_evento_transmissao(tid, "inicio")
+
         paths_only = [p for p, _ in video_paths]
         success = transmit_playlist(paths_only, rtmp_url, rtmp_key)
+
+        for tid in topicos_desta_rodada:
+            notificar_evento_transmissao(tid, "fim")
 
         for path, _ in video_paths:
             try:

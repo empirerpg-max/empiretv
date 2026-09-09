@@ -47,6 +47,8 @@ jobs:
           SPREADSHEET_ID: ${{ secrets.SPREADSHEET_ID }}
           RTMP_URL: ${{ secrets.RTMP_URL }}
           RTMP_KEY: ${{ secrets.RTMP_KEY }}
+          EMPIRE_HUB_API_URL: ${{ secrets.EMPIRE_HUB_API_URL }}
+          TV_WEBHOOK_SECRET: ${{ secrets.TV_WEBHOOK_SECRET }}
         run: |
           if [ "${{ github.event.inputs.modo_teste }}" = "sim" ]; then
             python transmissao.py --teste
