@@ -211,14 +211,63 @@ def _wrap_text(text, font, draw, max_width):
         lines.append(current)
     return lines
 
+def _build_title_card_background(W, H):
+    """
+    Fundo estático da vinheta (gerado uma única vez e reaproveitado em todo
+    frame): gradiente diagonal roxo + anéis neon ciano/rosa + ícone de losango
+    no topo, inspirado no template de tela de "live" do canal no Canva.
+    """
+    from PIL import Image, ImageDraw
+
+    top = (46, 20, 74)
+    bot = (110, 50, 170)
+    img = Image.new("RGB", (W, H), (0, 0, 0))
+    px = img.load()
+    for y in range(H):
+        t = y / H
+        r = int(top[0] * (1 - t) + bot[0] * t)
+        g = int(top[1] * (1 - t) + bot[1] * t)
+        b = int(top[2] * (1 - t) + bot[2] * t)
+        for x in range(W):
+            px[x, y] = (r, g, b)
+    img = img.convert("RGBA")
+
+    cyan = (60, 220, 235)
+    pink = (240, 60, 170)
+
+    def ring(cx, cy, r, width, color, alpha):
+        overlay = Image.new("RGBA", (W, H), (0, 0, 0, 0))
+        ImageDraw.Draw(overlay).ellipse(
+            [cx - r, cy - r, cx + r, cy + r], outline=color + (alpha,), width=width
+        )
+        return overlay
+
+    for ov in [
+        ring(120, 120, 130, 14, cyan, 200),
+        ring(220, 150, 170, 10, pink, 160),
+        ring(W - 140, H - 160, 150, 14, pink, 200),
+        ring(W - 260, H - 100, 190, 10, cyan, 140),
+    ]:
+        img = Image.alpha_composite(img, ov)
+    img = img.convert("RGB")
+
+    d = ImageDraw.Draw(img)
+    cx, cy = W // 2, 210
+    s = 46
+    d.polygon([(cx, cy - s), (cx + s, cy), (cx, cy + s), (cx - s, cy)], outline=cyan, width=8)
+    s2 = 24
+    d.polygon([(cx, cy - s2), (cx + s2, cy), (cx, cy + s2), (cx - s2, cy)], fill=cyan)
+    return img
+
 def generate_title_card(titulo, label_programa, output_path):
     """
     Gera vídeo de vinheta com efeito de digitação usando Pillow + FFmpeg.
     - Duração: sempre 10 segundos
-    - Texto roxo (#a470ef), fundo preto
+    - Fundo gradiente roxo com anéis neon ciano/rosa (estilo do template
+      de tela de live do canal), título branco em caixa alta
     - Quebra de linha automática: nunca passa da borda da tela
     - Fonte reduzida automaticamente se necessário
-    - Label do programa (coluna F) acima do título em cinza
+    - Label do programa (coluna F) acima do título em ciano
     """
     try:
         from PIL import Image, ImageDraw, ImageFont
@@ -231,11 +280,11 @@ def generate_title_card(titulo, label_programa, output_path):
     DURACAO = 10
     total_frames = DURACAO * FPS
     typing_frames = int(total_frames * 0.5)
-    MAX_TXT_W = 1720
+    MAX_TXT_W = 1700
 
     font_paths = [
-        "/usr/share/fonts/truetype/dejavu/DejaVuSans-Bold.ttf",
         "/usr/share/fonts/truetype/liberation/LiberationSans-Bold.ttf",
+        "/usr/share/fonts/truetype/dejavu/DejaVuSans-Bold.ttf",
         "/usr/share/fonts/truetype/freefont/FreeSansBold.ttf",
     ]
     font_path = None
@@ -243,6 +292,8 @@ def generate_title_card(titulo, label_programa, output_path):
         if os.path.exists(fp):
             font_path = fp
             break
+
+    titulo_maiusc = titulo.upper()
 
     font_size = 88
     font = font_small = None
@@ -253,7 +304,7 @@ def generate_title_card(titulo, label_programa, output_path):
             font = ImageFont.truetype(font_path, font_size)
         else:
             font = ImageFont.load_default()
-        lines = _wrap_text(titulo, font, tmp_draw, MAX_TXT_W)
+        lines = _wrap_text(titulo_maiusc, font, tmp_draw, MAX_TXT_W)
         widths = [tmp_draw.textbbox((0, 0), l, font=font)[2] for l in lines]
         if max(widths) <= MAX_TXT_W:
             break
@@ -264,26 +315,27 @@ def generate_title_card(titulo, label_programa, output_path):
     else:
         font_small = font
 
-    purple = (164, 112, 239)
-    white  = (255, 255, 255)
-    black  = (0, 0, 0)
-    gray   = (110, 110, 110)
+    white = (255, 255, 255)
+    black = (0, 0, 0)
+    cyan  = (60, 220, 235)
 
-    lines = _wrap_text(titulo, font, tmp_draw, MAX_TXT_W)
-    line_h = tmp_draw.textbbox((0, 0), "Ag", font=font)[3] + 12
+    lines = _wrap_text(titulo_maiusc, font, tmp_draw, MAX_TXT_W)
+    line_h = tmp_draw.textbbox((0, 0), "Ag", font=font)[3] + 16
     block_h = line_h * len(lines)
-    y0_block = (H - block_h) // 2 - 20
-    chars_total = len(titulo)
+    y0_block = (H - block_h) // 2 + 10
+    chars_total = len(titulo_maiusc)
+
+    background = _build_title_card_background(W, H)
 
     frames_dir = f"/tmp/tc_frames_{os.getpid()}"
     os.makedirs(frames_dir, exist_ok=True)
 
     step = 2
     for fi in range(0, total_frames, step):
-        img  = Image.new("RGB", (W, H), black)
+        img  = background.copy()
         draw = ImageDraw.Draw(img)
         n_chars = chars_total if fi >= typing_frames else max(1, int((fi / typing_frames) * chars_total))
-        current_text = titulo[:n_chars]
+        current_text = titulo_maiusc[:n_chars]
         show_cursor  = (fi // 15) % 2 == 0
         cur_lines = _wrap_text(current_text, font, draw, MAX_TXT_W)
         for li, line in enumerate(cur_lines):
@@ -291,8 +343,8 @@ def generate_title_card(titulo, label_programa, output_path):
             lw = lb[2] - lb[0]
             lx = (W - lw) // 2
             ly = y0_block + li * line_h
-            draw.text((lx + 3, ly + 3), line, font=font, fill=(30, 0, 55))
-            draw.text((lx, ly), line, font=font, fill=purple)
+            draw.text((lx + 3, ly + 3), line, font=font, fill=black)
+            draw.text((lx, ly), line, font=font, fill=white)
         if n_chars < chars_total or fi < typing_frames + FPS:
             last_line = cur_lines[-1] if cur_lines else ""
             cb = draw.textbbox((0, 0), last_line, font=font)
@@ -300,20 +352,20 @@ def generate_title_card(titulo, label_programa, output_path):
             cx = last_lx + (cb[2] - cb[0]) + 6
             last_ly = y0_block + (len(cur_lines) - 1) * line_h
             if show_cursor:
-                draw.text((cx, last_ly), "_", font=font, fill=white)
+                draw.text((cx, last_ly), "_", font=font, fill=cyan)
         lp = min(1.0, fi / max(1, typing_frames * 0.75))
         max_lw = min(MAX_TXT_W, max(draw.textbbox((0, 0), l, font=font)[2] for l in lines))
         bar_w = int(max_lw * lp)
         bar_y = y0_block + block_h + 16
         bar_x = (W - max_lw) // 2
         if bar_w > 0:
-            draw.rectangle([bar_x, bar_y, bar_x + bar_w, bar_y + 3], fill=purple)
+            draw.rectangle([bar_x, bar_y, bar_x + bar_w, bar_y + 4], fill=cyan)
         if label_programa:
-            alpha = min(200, fi * 10)
-            lc = tuple(int(c * alpha / 200) for c in gray)
+            alpha = min(255, fi * 12)
+            lc = tuple(int(c * alpha / 255) for c in cyan)
             lb2 = draw.textbbox((0, 0), label_programa, font=font_small)
             lx2 = (W - (lb2[2] - lb2[0])) // 2
-            draw.text((lx2, y0_block - 60), label_programa, font=font_small, fill=lc)
+            draw.text((lx2, y0_block - 70), label_programa, font=font_small, fill=lc)
         img.save(f"{frames_dir}/f{fi:05d}.png")
 
     for fi in range(total_frames):
