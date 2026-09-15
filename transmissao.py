@@ -16,7 +16,7 @@ MODO_TESTE = "--teste" in sys.argv
 # Inicia o download/preparo do vídeo com essa antecedência em relação ao
 # Horario agendado, pra garantir que já esteja pronto (baixado/normalizado)
 # no momento exato da transmissão.
-ANTECEDENCIA_MINUTOS = 20
+ANTECEDENCIA_MINUTOS = 60
 
 def log(msg):
     print(f"[{datetime.now(TZ_SP).strftime('%H:%M:%S')}] {msg}", flush=True)
