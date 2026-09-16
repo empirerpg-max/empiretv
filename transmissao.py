@@ -65,11 +65,10 @@ def get_pending_videos(sheet):
             programa = str(r.get("Programa", "Empire TV")).strip()
             data_str = str(r.get("Data", "")).strip()
             horario  = str(r.get("Horario", "")).strip()
-            raw_row = raw_data[idx + 1]
-            label_programa = str(raw_row[5]).strip() if len(raw_row) > 5 else programa
-            tipo   = str(raw_row[6]).strip() if len(raw_row) > 6 else ""
-            titulo = str(raw_row[7]).strip() if len(raw_row) > 7 else ""
-            topico_id = str(raw_row[10]).strip() if len(raw_row) > 10 else ""
+            label_programa = str(r.get("Programa", "")).strip() or programa
+            tipo   = str(r.get("Tipo", "")).strip()
+            titulo = str(r.get("Material", "")).strip()
+            topico_id = str(r.get("Topico_ID", "")).strip()
             videos.append({
                 "row": idx + 2, "fonte": fonte, "programa": programa,
                 "duracao": duracao, "horario": f"{data_str} {horario}".strip(),
@@ -101,11 +100,10 @@ def get_pending_videos(sheet):
         if not sched:
             log(f"Linha {idx+2} ({programa}) com data/hora inválida: '{data_str} {horario}' — ignorando.")
             continue
-        raw_row = raw_data[idx + 1]
-        label_programa = str(raw_row[5]).strip() if len(raw_row) > 5 else programa
-        tipo   = str(raw_row[6]).strip() if len(raw_row) > 6 else ""
-        titulo = str(raw_row[7]).strip() if len(raw_row) > 7 else ""
-        topico_id = str(raw_row[10]).strip() if len(raw_row) > 10 else ""
+        label_programa = str(r.get("Programa", "")).strip() or programa
+        tipo   = str(r.get("Tipo", "")).strip()
+        titulo = str(r.get("Material", "")).strip()
+        topico_id = str(r.get("Topico_ID", "")).strip()
         try:
             ordem = int(str(r.get("Ordem", "")).strip())
         except ValueError:
