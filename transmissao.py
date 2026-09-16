@@ -106,12 +106,16 @@ def get_pending_videos(sheet):
         tipo   = str(raw_row[6]).strip() if len(raw_row) > 6 else ""
         titulo = str(raw_row[7]).strip() if len(raw_row) > 7 else ""
         topico_id = str(raw_row[10]).strip() if len(raw_row) > 10 else ""
+        try:
+            ordem = int(str(r.get("Ordem", "")).strip())
+        except ValueError:
+            ordem = idx + 2  # sem coluna Ordem preenchida: cai no comportamento antigo (ordem da planilha)
         inicio_processamento = sched - timedelta(minutes=ANTECEDENCIA_MINUTOS)
         if now >= inicio_processamento:
             candidatos.append({
                 "row": idx + 2, "fonte": fonte, "programa": programa,
                 "duracao": duracao, "data_str": data_str, "horario": horario,
-                "sched": sched, "label_programa": label_programa,
+                "sched": sched, "ordem": ordem, "label_programa": label_programa,
                 "tipo": tipo, "titulo": titulo, "topico_id": topico_id,
             })
         else:
@@ -121,9 +125,10 @@ def get_pending_videos(sheet):
         return []
 
     # Roda toda a programação já vencida (Horario <= agora), em ordem cronológica
-    # de agendamento (e pela ordem da planilha em caso de empate) — sem filtrar
-    # por "Programa" nem exigir horário idêntico entre as linhas.
-    candidatos.sort(key=lambda c: (c["sched"], c["row"]))
+    # de agendamento e, em caso de empate, pela coluna "Ordem" (ajustável no
+    # painel de fila) — sem filtrar por "Programa" nem exigir horário idêntico
+    # entre as linhas.
+    candidatos.sort(key=lambda c: (c["sched"], c["ordem"]))
     log(f"{len(candidatos)} item(ns) vencido(s) — transmitindo em ordem de agendamento.")
     grupo = [
         {
@@ -667,8 +672,9 @@ def main():
     except Exception as e:
         log(f"Erro ao abrir planilha: {e}")
         sys.exit(1)
+    sheet_tab_name = os.environ.get("SHEET_TAB_NAME", "Programacao_RPG")
     try:
-        sheet = spreadsheet.worksheet("Programacao_RPG")
+        sheet = spreadsheet.worksheet(sheet_tab_name)
     except Exception:
         sheet = spreadsheet.get_worksheet(0)
 
